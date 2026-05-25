@@ -37,15 +37,29 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ── Constants ─────────────────────────────────────────────────────────────────
-COUNTRY_SHEET = {
-    "Francia": "ES-FR", "France": "ES-FR",
-    "Italia": "ES-IT", "Italy": "ES-IT",
-    "Alemania": "ES-DE", "Germany": "ES-DE",
-    "Portugal": "PT",
-    "Bélgica": "BE - NL", "Belgium": "BE - NL",
-    "Países Bajos": "BE - NL", "Netherlands": "BE - NL",
-    "Polonia": "PL-SE", "Sweden": "PL-SE", "Suecia": "PL-SE", "Poland": "PL-SE",
+# Maps country name -> ordered list of inter tarifa sheets to search (first match wins).
+# For IT/DE/FR there are two sheets each (ES-XX local + XX-XX native) — both searched in order.
+# For BE/NL/PL/SE each country has its own independent sheet; if the file uses a combined
+# sheet (e.g. "BE - NL") it is tried as fallback so both naming conventions work.
+COUNTRY_SHEETS = {
+    "Francia":      ["ES-FR", "FR-FR"],
+    "France":       ["ES-FR", "FR-FR"],
+    "Italia":       ["ES-IT", "IT-IT"],
+    "Italy":        ["ES-IT", "IT-IT"],
+    "Alemania":     ["ES-DE", "DE-DE"],
+    "Germany":      ["ES-DE", "DE-DE"],
+    "Portugal":     ["PT"],
+    "Bélgica":      ["BE", "BE - NL"],
+    "Belgium":      ["BE", "BE - NL"],
+    "Países Bajos": ["NL", "BE - NL"],
+    "Netherlands":  ["NL", "BE - NL"],
+    "Polonia":      ["PL", "PL-SE"],
+    "Poland":       ["PL", "PL-SE"],
+    "Suecia":       ["SE", "PL-SE"],
+    "Sweden":       ["SE", "PL-SE"],
 }
+# Keep old name as alias for any remaining references
+COUNTRY_SHEET = {k: v[0] for k, v in COUNTRY_SHEETS.items()}
 SPAIN = {"España", "Spain", "ES"}
 NAC_ORDER = ["T_MIR", "T_AMZ", "T_C4", "T_MM", "T_PRIV"]
 
@@ -136,40 +150,26 @@ def build_lookup(sheets, order):
 def get_pvp(sku_norm, pais, nac_lookup, inter_lookups):
     """
     Find PVP for a normalized SKU.
-    - Spain: national tarifa only (fallback to inter if not found)
-    - Other: ALWAYS use the country-specific inter sheet first.
-      Only fall back to national if SKU genuinely absent from ALL inter sheets.
+    - Spain: national tarifa only (T_MIR → T_AMZ → T_C4 → ...).
+    - Other countries: search each sheet in COUNTRY_SHEETS list in order.
+      Italia → [ES-IT, IT-IT], Francia → [ES-FR, FR-FR], Alemania → [ES-DE, DE-DE].
+      If not found in any of the country's sheets → ❌ NO EN TARIFA.
+      No cross-country fallback — a Portuguese price is never used for an Italian order.
     """
     if pais in SPAIN:
-        if sku_norm in nac_lookup:
-            return nac_lookup[sku_norm]
-        # Spain SKU not in national — try inter as last resort
-        for _, lkp in inter_lookups.items():
+        return nac_lookup.get(sku_norm)
+
+    sheets_for_country = COUNTRY_SHEETS.get(pais)
+    if sheets_for_country:
+        for sheet_key in sheets_for_country:
+            lkp = inter_lookups.get(sheet_key, {})
             if sku_norm in lkp:
                 return lkp[sku_norm]
+        # SKU not in any sheet for this country
         return None
 
-    # International order: correct country sheet → national → other inter sheets
-    sheet_key = COUNTRY_SHEET.get(pais)
-
-    # 1. Correct country inter sheet
-    if sheet_key:
-        lkp = inter_lookups.get(sheet_key, {})
-        if sku_norm in lkp:
-            return lkp[sku_norm]
-
-    # 2. National tarifa
-    if sku_norm in nac_lookup:
-        return nac_lookup[sku_norm]
-
-    # 3. Any other inter sheet (genuine fallback — SKU not in expected sheet)
-    for sh, lkp in inter_lookups.items():
-        if sh == sheet_key:
-            continue
-        if sku_norm in lkp:
-            return lkp[sku_norm]
-
-    return None
+    # Country not mapped → try national as best guess
+    return nac_lookup.get(sku_norm)
 
 def analyze_row(row, nac_lookup, inter_lookups):
     sku_norm = row["_sku_norm"]
