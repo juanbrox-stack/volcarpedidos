@@ -101,46 +101,74 @@ def expand_multi_sku_rows(df):
 def load_tarifa(file_bytes, filename):
     return pd.read_excel(io.BytesIO(file_bytes), sheet_name=None)
 
+def build_sheet_lookup(df, sheet_name):
+    """Build {sku_str: {min, pub, sheet}} lookup for a SINGLE tarifa sheet"""
+    lookup = {}
+    ref_cols = [c for c in df.columns if str(c).strip() == "REFERENCIA"]
+    if not ref_cols:
+        return lookup
+    ref_col = ref_cols[0]
+    for _, r in df.iterrows():
+        key = str(r[ref_col]).strip()
+        if key:
+            try:
+                lookup[key] = {
+                    "min": float(r.get("PVP MIN.", 0)),
+                    "pub": float(r.get("PVP PUB.", 0)),
+                    "sheet": sheet_name,
+                }
+            except:
+                pass
+    return lookup
+
 def build_lookup(sheets, order):
-    """Build {sku_str: {min, pub, sheet}} lookup from tarifa sheets"""
+    """Build merged {sku_str: {min, pub, sheet}} from multiple sheets (national use)"""
     lookup = {}
     for sh in order:
         df = sheets.get(sh)
         if df is None:
             continue
-        ref_cols = [c for c in df.columns if str(c).strip() == "REFERENCIA"]
-        if not ref_cols:
-            continue
-        ref_col = ref_cols[0]
-        for _, r in df.iterrows():
-            key = str(r[ref_col]).strip()
-            if key and key not in lookup:
-                try:
-                    lookup[key] = {
-                        "min": float(r.get("PVP MIN.", 0)),
-                        "pub": float(r.get("PVP PUB.", 0)),
-                        "sheet": sh,
-                    }
-                except:
-                    pass
+        for key, val in build_sheet_lookup(df, sh).items():
+            if key not in lookup:   # first sheet in order wins
+                lookup[key] = val
     return lookup
 
 def get_pvp(sku_norm, pais, nac_lookup, inter_lookups):
-    """Find PVP for a normalized SKU, national first for Spain, else international"""
+    """
+    Find PVP for a normalized SKU.
+    - Spain: national tarifa only (fallback to inter if not found)
+    - Other: ALWAYS use the country-specific inter sheet first.
+      Only fall back to national if SKU genuinely absent from ALL inter sheets.
+    """
     if pais in SPAIN:
         if sku_norm in nac_lookup:
             return nac_lookup[sku_norm]
-    else:
-        sheet_key = COUNTRY_SHEET.get(pais)
-        if sheet_key and sku_norm in inter_lookups.get(sheet_key, {}):
-            return inter_lookups[sheet_key][sku_norm]
-        # Fallback: try all inter sheets
+        # Spain SKU not in national — try inter as last resort
         for _, lkp in inter_lookups.items():
             if sku_norm in lkp:
                 return lkp[sku_norm]
-    # Final fallback: national
+        return None
+
+    # International order: correct country sheet → national → other inter sheets
+    sheet_key = COUNTRY_SHEET.get(pais)
+
+    # 1. Correct country inter sheet
+    if sheet_key:
+        lkp = inter_lookups.get(sheet_key, {})
+        if sku_norm in lkp:
+            return lkp[sku_norm]
+
+    # 2. National tarifa
     if sku_norm in nac_lookup:
         return nac_lookup[sku_norm]
+
+    # 3. Any other inter sheet (genuine fallback — SKU not in expected sheet)
+    for sh, lkp in inter_lookups.items():
+        if sh == sheet_key:
+            continue
+        if sku_norm in lkp:
+            return lkp[sku_norm]
+
     return None
 
 def analyze_row(row, nac_lookup, inter_lookups):
@@ -377,9 +405,8 @@ with st.spinner("Cargando tarifas..."):
 
     # Build lookups
     nac_lookup = build_lookup(nac_sheets, NAC_ORDER)
-    inter_lookups = {}
-    for sh, df in inter_sheets.items():
-        inter_lookups[sh] = build_lookup({sh: df}, [sh])
+    # Each inter sheet gets its own isolated lookup — never mixed
+    inter_lookups = {sh: build_sheet_lookup(df, sh) for sh, df in inter_sheets.items()}
 
 st.success(f"✅ Tarifas cargadas — Nacional: {len(nac_lookup):,} SKUs | Internacional: {sum(len(v) for v in inter_lookups.values()):,} refs")
 
