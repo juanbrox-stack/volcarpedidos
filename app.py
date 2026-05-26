@@ -618,11 +618,11 @@ def email_widget(df_tarifa, key_prefix):
 
     st.caption(f"Se enviarán **{len(df_sel)}** línea(s) con adjunto Excel.")
 
-    remitente = st.secrets.get("EMAIL_REMITENTE", "")
-    password  = st.secrets.get("EMAIL_PASSWORD",  "")
+    remitente = st.secrets.get("correo", {}).get("usuario", "")
+    password  = st.secrets.get("correo", {}).get("password", "")
 
     if not remitente or not password:
-        st.warning("⚠️ Configura `EMAIL_REMITENTE` y `EMAIL_PASSWORD` en los Secrets de Streamlit.")
+        st.warning("⚠️ Configura el bloque `[correo]` en los Secrets de Streamlit.")
     elif not destinatario:
         st.warning("⚠️ Introduce un email destinatario.")
     else:
