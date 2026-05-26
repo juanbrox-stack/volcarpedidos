@@ -72,11 +72,15 @@ NAC_ORDER = ["T_MIR", "T_AMZ", "T_C4", "T_MM", "T_PRIV"]
 # Edita este diccionario con los emails reales de cada responsable.
 # La clave debe coincidir (case-insensitive) con el valor de la columna Marketplace.
 MARKETPLACE_EMAILS = {
-    "worten (beezup)":  "responsable.worten@empresa.com",
-    "aurgi":            "responsable.aurgi@empresa.com",
-    "b2x-85-shein":     "responsable.shein@empresa.com",
-    "amazon":           "responsable.amazon@empresa.com",
-    "miravia":          "responsable.miravia@empresa.com",
+    "worten (beezup)": "clioleal@cecotec.es",
+    "manomanoIT": "aldocalligher@cecotec.es",
+    "b2x-85-shein": "nahirmartinez@cecotec.es",
+    "carrefour": "mariaaldomar@cecotec.es",
+    "miravia": "clioleal@cecotec.es",
+    "manomanoFR": "mariaruiz@cecotec.es",
+    "mediamarkt": "mariaruiz@cecotec.es",
+    "privalia": "mariaruiz@cecotec.es",
+    "fnac": "mariaaldomar@cecotec.es",
     # Añade más según necesites:
     # "carrefour":      "responsable.carrefour@empresa.com",
 }
