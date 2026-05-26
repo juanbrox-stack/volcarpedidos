@@ -68,98 +68,64 @@ COUNTRY_SHEET = {k: v[0] for k, v in COUNTRY_SHEETS.items()}
 SPAIN = {"España", "Spain", "ES"}
 NAC_ORDER = ["T_MIR", "T_AMZ", "T_C4", "T_MM", "T_PRIV"]
 
-# ── Email config: marketplace → email responsable ──────────────────────────────
-# Edita este diccionario con los emails reales de cada responsable.
-# La clave debe coincidir (case-insensitive) con el valor de la columna Marketplace.
+# ── Email: marketplace → responsable ──────────────────────────────────────────
+# Clave en minúsculas, debe coincidir con el valor de la columna Marketplace.
 MARKETPLACE_EMAILS = {
-    "worten (beezup)": "clioleal@cecotec.es",
-    "manomanoIT": "aldocalligher@cecotec.es",
-    "b2x-85-shein": "nahirmartinez@cecotec.es",
-    "carrefour": "mariaaldomar@cecotec.es",
-    "miravia": "clioleal@cecotec.es",
-    "manomanoFR": "mariaruiz@cecotec.es",
-    "mediamarkt": "mariaruiz@cecotec.es",
-    "privalia": "mariaruiz@cecotec.es",
-    "fnac": "mariaaldomar@cecotec.es",
-    # Añade más según necesites:
-    # "carrefour":      "responsable.carrefour@empresa.com",
+    "worten (beezup)":  "responsable.worten@empresa.com",
+    "aurgi":            "responsable.aurgi@empresa.com",
+    "b2x-85-shein":     "responsable.shein@empresa.com",
+    "amazon":           "responsable.amazon@empresa.com",
+    "miravia":          "responsable.miravia@empresa.com",
 }
 
 def get_email_for_marketplace(marketplace: str) -> str:
-    """Devuelve el email configurado para un marketplace, o cadena vacía si no hay."""
     return MARKETPLACE_EMAILS.get(str(marketplace).strip().lower(), "")
 
-def send_order_email(destinatario: str, asunto: str, cuerpo_html: str,
-                     df_lineas: pd.DataFrame, remitente: str, password: str) -> tuple[bool, str]:
-    """
-    Envía un email con las líneas de pedido seleccionadas como tabla HTML
-    y adjunta un Excel con las mismas líneas.
-    Usa Gmail SMTP con contraseña de aplicación.
-    Devuelve (éxito: bool, mensaje: str).
-    """
+def send_order_email(destinatario, asunto, df_lineas, remitente, password):
     try:
         msg = MIMEMultipart("alternative")
         msg["Subject"] = asunto
-        msg["From"] = remitente
-        msg["To"] = destinatario
-
-        # ── Construir tabla HTML con las líneas
-        def _td(v, bold=False, color=""):
-            style = f"padding:6px 10px;border:1px solid #e2e8f0;font-family:Arial,sans-serif;font-size:13px;"
-            if bold:
-                style += "font-weight:600;"
-            if color:
-                style += f"color:{color};"
-            return f"<td style='{style}'>{v}</td>"
+        msg["From"]    = remitente
+        msg["To"]      = destinatario
 
         STATUS_COLOR_MAP = {
-            "✅ OK": "#065f46",
-            "🟡 EN MÍNIMO": "#92400e",
-            "🔴 BAJO MÍNIMO": "#991b1b",
+            "✅ OK":           "#065f46",
+            "🟡 EN MÍNIMO":    "#92400e",
+            "🔴 BAJO MÍNIMO":  "#991b1b",
             "❌ NO EN TARIFA": "#831843",
-            "⚠️ SIN PRECIO": "#92400e",
+            "⚠️ SIN PRECIO":   "#92400e",
         }
-
-        filas_html = ""
-        for _, row in df_lineas.iterrows():
-            estado = str(row.get("Estado", ""))
-            color_est = STATUS_COLOR_MAP.get(estado, "#1e293b")
-            bg = "#f8fafc" if _ % 2 == 0 else "#ffffff"
-            filas_html += f"<tr style='background:{bg}'>"
-            filas_html += _td(row.get("Pedido", ""))
-            filas_html += _td(row.get("Fecha", ""))
-            filas_html += _td(row.get("Marketplace", ""))
-            filas_html += _td(row.get("País", ""))
-            filas_html += _td(row.get("SKU", ""))
-            filas_html += _td(row.get("Cant", ""))
-            filas_html += _td(f"{row.get('Precio Pedido (€)', '')} €")
-            filas_html += _td(f"{row.get('PVP Mín (€)', '')} €")
-            filas_html += _td(estado, bold=True, color=color_est)
-            filas_html += _td(f"{row.get('Dif vs Mín (€)', '')} €")
-            filas_html += "</tr>"
-
         th_style = "padding:7px 10px;background:#1B2A4A;color:#fff;font-family:Arial,sans-serif;font-size:12px;text-align:left;"
+        td_style = "padding:6px 10px;border:1px solid #e2e8f0;font-family:Arial,sans-serif;font-size:13px;"
         cabeceras = ["Pedido","Fecha","Marketplace","País","SKU","Cant","Precio (€)","PVP Mín (€)","Estado","Dif vs Mín (€)"]
         ths = "".join(f"<th style='{th_style}'>{h}</th>" for h in cabeceras)
 
-        html = f"""
-        <html><body style="font-family:Arial,sans-serif;color:#1e293b;">
+        filas_html = ""
+        for i, (_, row) in enumerate(df_lineas.iterrows()):
+            estado = str(row.get("Estado", ""))
+            color_est = STATUS_COLOR_MAP.get(estado, "#1e293b")
+            bg = "#f8fafc" if i % 2 == 0 else "#ffffff"
+            def td(v, bold=False, color=""):
+                s = td_style + (f"font-weight:600;" if bold else "") + (f"color:{color};" if color else "")
+                return f"<td style='{s}'>{v}</td>"
+            filas_html += f"<tr style='background:{bg}'>"
+            filas_html += td(row.get("Pedido","")) + td(row.get("Fecha","")) + td(row.get("Marketplace",""))
+            filas_html += td(row.get("País","")) + td(row.get("SKU","")) + td(row.get("Cant",""))
+            filas_html += td(f"{row.get('Precio Pedido (€)','')} €") + td(f"{row.get('PVP Mín (€)','')} €")
+            filas_html += td(estado, bold=True, color=color_est) + td(f"{row.get('Dif vs Mín (€)','')} €")
+            filas_html += "</tr>"
+
+        html = f"""<html><body style="font-family:Arial,sans-serif;color:#1e293b;">
         <h2 style="color:#1B2A4A;">📦 Revisión de pedidos — Análisis de Tarifa</h2>
         <p>Se han detectado pedidos que requieren tu atención:</p>
         <table style="border-collapse:collapse;width:100%;">
-          <thead><tr>{ths}</tr></thead>
-          <tbody>{filas_html}</tbody>
+          <thead><tr>{ths}</tr></thead><tbody>{filas_html}</tbody>
         </table>
-        <br>
-        <p style="font-size:12px;color:#64748b;">
-          Generado automáticamente por <strong>Procesador de Pedidos</strong>.
-        </p>
-        </body></html>
-        """
-
+        <br><p style="font-size:12px;color:#64748b;">Generado automáticamente por <strong>Procesador de Pedidos</strong>.</p>
+        </body></html>"""
         msg.attach(MIMEText(html, "html", "utf-8"))
 
-        # ── Adjuntar Excel con las líneas
+        # Adjunto Excel
         excel_bytes = build_excel([("Líneas pedido", df_lineas, None)])
         part = MIMEBase("application", "octet-stream")
         part.set_payload(excel_bytes)
@@ -167,7 +133,6 @@ def send_order_email(destinatario: str, asunto: str, cuerpo_html: str,
         part.add_header("Content-Disposition", 'attachment; filename="lineas_pedido.xlsx"')
         msg.attach(part)
 
-        # ── Enviar via Gmail SMTP
         with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
             server.login(remitente, password)
             server.sendmail(remitente, destinatario, msg.as_string())
@@ -484,7 +449,7 @@ with st.sidebar:
 # ═══════════════════════════════════════════════════════════════════════════════
 st.title("📦 Procesador de Pedidos")
 
-if not run_btn:
+if not run_btn and "results" not in st.session_state:
     st.info("👈 Selecciona el proceso y sube los ficheros en el panel lateral. Luego pulsa **Procesar**.")
     st.markdown("""
     #### Proceso A — Pago aceptado
@@ -500,188 +465,216 @@ if not run_btn:
     """)
     st.stop()
 
-# ── Validate uploads ──────────────────────────────────────────────────────────
-errors = []
-if not nac_file: errors.append("Tarifa Nacional")
-if not inter_file: errors.append("Tarifa Internacional")
-if not es_miravia and not libro_file: errors.append("Fichero Rentabilidad")
-if es_miravia and not miravia_file: errors.append("PagoAceptadoMiravia.xlsx")
+# ── Si se pulsa Procesar: validar, calcular y guardar en session_state ─────────
+if run_btn:
+    errors = []
+    if not nac_file:   errors.append("Tarifa Nacional")
+    if not inter_file: errors.append("Tarifa Internacional")
+    if not es_miravia and not libro_file:   errors.append("Fichero Rentabilidad")
+    if es_miravia     and not miravia_file: errors.append("PagoAceptadoMiravia.xlsx")
+    if errors:
+        st.error(f"Faltan ficheros: {', '.join(errors)}")
+        st.stop()
 
-if errors:
-    st.error(f"Faltan ficheros: {', '.join(errors)}")
+    # Tarifas
+    with st.spinner("Cargando tarifas..."):
+        nac_sheets   = load_tarifa(nac_file.read(),   nac_file.name)
+        inter_sheets = load_tarifa(inter_file.read(), inter_file.name)
+        nac_lookup   = build_lookup(nac_sheets, NAC_ORDER)
+        inter_lookups = {sh: build_sheet_lookup(df, sh) for sh, df in inter_sheets.items()}
+
+    if not es_miravia:
+        with st.spinner("Procesando..."):
+            libro_bytes  = libro_file.read()
+            libro_sheets = pd.read_excel(io.BytesIO(libro_bytes), sheet_name=None)
+            hoja1_raw    = libro_sheets.get("Hoja1", pd.DataFrame())
+            hoja2_raw    = libro_sheets.get("Hoja2", pd.DataFrame())
+            sheet_names  = list(libro_sheets.keys())
+            if "Hoja2" not in libro_sheets and len(sheet_names) > 1:
+                hoja2_raw = libro_sheets[sheet_names[1]]
+
+            h1_clean  = clean_hoja1(hoja1_raw) if not hoja1_raw.empty else pd.DataFrame()
+            dupes_h1  = check_duplicates_hoja1(h1_clean) if not h1_clean.empty else pd.DataFrame()
+
+            df_tarifa   = pd.DataFrame()
+            multi_count = 0
+            if not hoja2_raw.empty:
+                df_expanded = expand_multi_sku_rows(hoja2_raw)
+                results = []
+                for _, row in df_expanded.iterrows():
+                    status, pvp_min, pvp_pub, diff_min, diff_pub, tarifa_sheet = analyze_row(row, nac_lookup, inter_lookups)
+                    results.append({
+                        "Pedido": row.get("Pedido",""), "Fecha": row.get("Fecha",""),
+                        "Marketplace": row.get("Marketplace",""), "Id Marketplace": row.get("Id Marketplace",""),
+                        "País": row.get("País",""), "SKU Original": row.get("_sku_orig", row.get("Sku","")),
+                        "SKU": row.get("Sku",""), "SKU Norm.": row.get("_sku_norm",""),
+                        "Multi-SKU": "✔" if row.get("_multi_flag") else "",
+                        "Cant": row.get("Cant",""), "Precio Pedido (€)": parse_price(row.get("Pedido.1")),
+                        "Hoja Tarifa": tarifa_sheet, "PVP Mín (€)": pvp_min, "PVP Pub (€)": pvp_pub,
+                        "Dif vs Mín (€)": diff_min, "Dif vs Pub (€)": diff_pub, "Estado": status,
+                    })
+                df_tarifa   = pd.DataFrame(results)
+                multi_count = int(df_expanded["_multi_flag"].sum())
+
+        st.session_state["results"] = {
+            "tipo": "A", "nac_count": len(nac_lookup),
+            "inter_count": sum(len(v) for v in inter_lookups.values()),
+            "h1_clean": h1_clean, "dupes_h1": dupes_h1,
+            "df_tarifa": df_tarifa, "multi_count": multi_count,
+        }
+
+    else:  # Miravia
+        with st.spinner("Procesando Miravia..."):
+            mir_bytes    = miravia_file.read()
+            mir_sheets   = pd.read_excel(io.BytesIO(mir_bytes), sheet_name=None)
+            hoja1_raw    = mir_sheets.get("Hoja1", pd.DataFrame())
+            hoja2_raw    = mir_sheets.get("Hoja2", pd.DataFrame())
+
+            df_cancelados = None
+            if cancelados_file:
+                can_bytes  = cancelados_file.read()
+                can_sheets = pd.read_excel(io.BytesIO(can_bytes), sheet_name=None)
+                df_cancelados = list(can_sheets.values())[0]
+
+            h1_clean       = clean_hoja1(hoja1_raw) if not hoja1_raw.empty else pd.DataFrame()
+            dupes_comb, id_map = check_duplicates_miravia(h1_clean) if not h1_clean.empty else (pd.DataFrame(), {})
+            df_cancel_match = cross_miravia_cancelados(h1_clean, df_cancelados) if df_cancelados is not None else pd.DataFrame()
+
+            df_tarifa   = pd.DataFrame()
+            multi_count = 0
+            if not hoja2_raw.empty:
+                df_expanded = expand_multi_sku_rows(hoja2_raw)
+                results = []
+                for _, row in df_expanded.iterrows():
+                    status, pvp_min, pvp_pub, diff_min, diff_pub, tarifa_sheet = analyze_row(row, nac_lookup, inter_lookups)
+                    results.append({
+                        "Pedido": row.get("Pedido",""), "SKU Original": row.get("_sku_orig",""),
+                        "SKU": row.get("Sku",""), "SKU Norm.": row.get("_sku_norm",""),
+                        "Multi-SKU": "✔" if row.get("_multi_flag") else "",
+                        "País": row.get("País",""), "Precio Pedido (€)": parse_price(row.get("Pedido.1")),
+                        "Hoja Tarifa": tarifa_sheet, "PVP Mín (€)": pvp_min, "PVP Pub (€)": pvp_pub,
+                        "Dif vs Mín (€)": diff_min, "Estado": status,
+                    })
+                df_tarifa   = pd.DataFrame(results)
+                multi_count = int(df_expanded["_multi_flag"].sum())
+
+        st.session_state["results"] = {
+            "tipo": "B", "nac_count": len(nac_lookup),
+            "inter_count": sum(len(v) for v in inter_lookups.values()),
+            "h1_clean": h1_clean, "dupes_comb": dupes_comb, "id_map": id_map,
+            "df_cancel_match": df_cancel_match, "df_cancelados": df_cancelados,
+            "cancelados_provided": cancelados_file is not None,
+            "df_tarifa": df_tarifa, "multi_count": multi_count,
+        }
+
+# ── Leer resultados de session_state y mostrar ────────────────────────────────
+if "results" not in st.session_state:
     st.stop()
 
-# ── Load tarifas ──────────────────────────────────────────────────────────────
-with st.spinner("Cargando tarifas..."):
-    nac_sheets = load_tarifa(nac_file.read(), nac_file.name)
-    inter_sheets = load_tarifa(inter_file.read(), inter_file.name)
+R = st.session_state["results"]
 
-    # Build lookups
-    nac_lookup = build_lookup(nac_sheets, NAC_ORDER)
-    # Each inter sheet gets its own isolated lookup — never mixed
-    inter_lookups = {sh: build_sheet_lookup(df, sh) for sh, df in inter_sheets.items()}
+st.success(f"✅ Tarifas cargadas — Nacional: {R['nac_count']:,} SKUs | Internacional: {R['inter_count']:,} refs")
 
-st.success(f"✅ Tarifas cargadas — Nacional: {len(nac_lookup):,} SKUs | Internacional: {sum(len(v) for v in inter_lookups.values()):,} refs")
+# ── Widget email reutilizable ─────────────────────────────────────────────────
+def email_widget(df_tarifa, key_prefix):
+    """Muestra selector de líneas + formulario de envío de email."""
+    st.markdown("---")
+    st.markdown("### 📧 Enviar líneas de pedido por email")
+
+    opciones = df_tarifa.apply(
+        lambda r: f"Pedido {r.get('Pedido','')} · {r.get('Marketplace', r.get('País',''))} · SKU {r.get('SKU','')} · {r.get('Estado','')}",
+        axis=1
+    ).tolist()
+
+    seleccionadas = st.multiselect(
+        "Selecciona las líneas a enviar:",
+        options=list(range(len(df_tarifa))),
+        format_func=lambda i: opciones[i],
+        key=f"{key_prefix}_rows",
+    )
+
+    if not seleccionadas:
+        st.info("Selecciona una o varias líneas de la tabla para enviar por email.")
+        return
+
+    df_sel = df_tarifa.iloc[seleccionadas].reset_index(drop=True)
+
+    # Autocompletar email si todas las líneas son del mismo marketplace
+    mps = df_sel["Marketplace"].dropna().unique().tolist() if "Marketplace" in df_sel.columns else []
+    email_auto = get_email_for_marketplace(mps[0]) if len(mps) == 1 else ""
+    asunto_auto = f"Revisión pedidos — {', '.join(mps)}" if mps else "Revisión pedidos"
+
+    col1, col2 = st.columns([2, 1])
+    with col1:
+        destinatario = st.text_input(
+            "📬 Email destinatario",
+            value=email_auto,
+            placeholder="responsable@empresa.com",
+            help="Se autocompleta según el marketplace. Editable libremente.",
+            key=f"{key_prefix}_dest",
+        )
+    with col2:
+        asunto = st.text_input("✏️ Asunto", value=asunto_auto, key=f"{key_prefix}_asunto")
+
+    st.caption(f"Se enviarán **{len(df_sel)}** línea(s) con adjunto Excel.")
+
+    remitente = st.secrets.get("EMAIL_REMITENTE", "")
+    password  = st.secrets.get("EMAIL_PASSWORD",  "")
+
+    if not remitente or not password:
+        st.warning("⚠️ Configura `EMAIL_REMITENTE` y `EMAIL_PASSWORD` en los Secrets de Streamlit.")
+    elif not destinatario:
+        st.warning("⚠️ Introduce un email destinatario.")
+    else:
+        if st.button("📤 Enviar email", type="primary", key=f"{key_prefix}_send"):
+            ok, msg_result = send_order_email(destinatario, asunto, df_sel, remitente, password)
+            if ok:
+                st.success(msg_result)
+            else:
+                st.error(msg_result)
+
+# ─────────────────────────────────────────────────────────────────────────────
+def color_status(val):
+    colors = {
+        "✅ OK":           "background-color:#d1fae5;color:#065f46",
+        "🟡 EN MÍNIMO":    "background-color:#fef3c7;color:#92400e",
+        "🔴 BAJO MÍNIMO":  "background-color:#fee2e2;color:#991b1b",
+        "❌ NO EN TARIFA": "background-color:#fce7f3;color:#831843",
+        "⚠️ SIN PRECIO":   "background-color:#fef3c7;color:#92400e",
+    }
+    return colors.get(val, "")
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# PROCESO A — Pago aceptado
+# DISPLAY A
 # ═══════════════════════════════════════════════════════════════════════════════
-if not es_miravia:
-    with st.spinner("Procesando..."):
-        libro_bytes = libro_file.read()
-        libro_sheets = pd.read_excel(io.BytesIO(libro_bytes), sheet_name=None)
+if R["tipo"] == "A":
+    df_tarifa   = R["df_tarifa"]
+    h1_clean    = R["h1_clean"]
+    dupes_h1    = R["dupes_h1"]
+    multi_count = R["multi_count"]
 
-        hoja1_raw = libro_sheets.get("Hoja1", pd.DataFrame())
-        hoja2_raw = libro_sheets.get("Hoja2", pd.DataFrame())
-        # Detect alternate sheet names (Rentabilidad might have different names)
-        sheet_names = list(libro_sheets.keys())
-        if "Hoja2" not in libro_sheets and len(sheet_names) > 1:
-            hoja2_raw = libro_sheets[sheet_names[1]]
-
-        # ── Clean Hoja1
-        h1_clean = clean_hoja1(hoja1_raw) if not hoja1_raw.empty else pd.DataFrame()
-
-        # ── Duplicates Hoja1
-        dupes_h1 = check_duplicates_hoja1(h1_clean) if not h1_clean.empty else pd.DataFrame()
-
-        # ── Expand multi-SKU and analyse tarifa
-        if not hoja2_raw.empty:
-            df_expanded = expand_multi_sku_rows(hoja2_raw)
-            results = []
-            for _, row in df_expanded.iterrows():
-                status, pvp_min, pvp_pub, diff_min, diff_pub, tarifa_sheet = analyze_row(
-                    row, nac_lookup, inter_lookups
-                )
-                results.append({
-                    "Pedido": row.get("Pedido", ""),
-                    "Fecha": row.get("Fecha", ""),
-                    "Marketplace": row.get("Marketplace", ""),
-                    "Id Marketplace": row.get("Id Marketplace", ""),
-                    "País": row.get("País", ""),
-                    "SKU Original": row.get("_sku_orig", row.get("Sku", "")),
-                    "SKU": row.get("Sku", ""),
-                    "SKU Norm.": row.get("_sku_norm", ""),
-                    "Multi-SKU": "✔" if row.get("_multi_flag") else "",
-                    "Cant": row.get("Cant", ""),
-                    "Precio Pedido (€)": parse_price(row.get("Pedido.1")),
-                    "Hoja Tarifa": tarifa_sheet,
-                    "PVP Mín (€)": pvp_min,
-                    "PVP Pub (€)": pvp_pub,
-                    "Dif vs Mín (€)": diff_min,
-                    "Dif vs Pub (€)": diff_pub,
-                    "Estado": status,
-                })
-            df_tarifa = pd.DataFrame(results)
-            multi_count = df_expanded["_multi_flag"].sum()
-        else:
-            df_tarifa = pd.DataFrame()
-            multi_count = 0
-
-    # ── Display
     st.markdown("---")
     st.markdown("## 🛒 Pago aceptado — Resultados")
 
-    ok = (df_tarifa["Estado"] == "✅ OK").sum() if not df_tarifa.empty else 0
-    warn = df_tarifa["Estado"].str.startswith("🔴").sum() + df_tarifa["Estado"].str.startswith("🟡").sum() if not df_tarifa.empty else 0
+    ok     = (df_tarifa["Estado"] == "✅ OK").sum() if not df_tarifa.empty else 0
+    warn   = (df_tarifa["Estado"].str.startswith("🔴").sum() + df_tarifa["Estado"].str.startswith("🟡").sum()) if not df_tarifa.empty else 0
     cancel = df_tarifa["Estado"].str.startswith("❌").sum() if not df_tarifa.empty else 0
 
     col1, col2, col3, col4, col5 = st.columns(5)
-    col1.metric("📋 Hoja1 filas", len(h1_clean))
-    col2.metric("⚠️ Duplicados", len(dupes_h1))
-    col3.metric("✅ OK tarifa", ok)
-    col4.metric("🔴 Bajo mínimo", warn)
-    col5.metric("❌ No en tarifa", cancel)
+    col1.metric("📋 Hoja1 filas",    len(h1_clean))
+    col2.metric("⚠️ Duplicados",     len(dupes_h1))
+    col3.metric("✅ OK tarifa",       ok)
+    col4.metric("🔴 Bajo mínimo",    warn)
+    col5.metric("❌ No en tarifa",   cancel)
 
-    # Tabs
     tab1, tab2, tab3 = st.tabs(["💰 Análisis Tarifa", "🔍 Duplicados Hoja1", "📄 Hoja1 limpia"])
 
     with tab1:
         if not df_tarifa.empty:
             if multi_count > 0:
                 st.info(f"🔀 Se han expandido pedidos multi-SKU: **{multi_count}** líneas generadas por separación de SKUs en la misma celda")
-
-            # Color-coded table
-            def color_status(val):
-                colors = {
-                    "✅ OK": "background-color:#d1fae5;color:#065f46",
-                    "🟡 EN MÍNIMO": "background-color:#fef3c7;color:#92400e",
-                    "🔴 BAJO MÍNIMO": "background-color:#fee2e2;color:#991b1b",
-                    "❌ NO EN TARIFA": "background-color:#fce7f3;color:#831843",
-                    "⚠️ SIN PRECIO": "background-color:#fef3c7;color:#92400e",
-                }
-                return colors.get(val, "")
-
-            styled = df_tarifa.style.map(color_status, subset=["Estado"])
-            st.dataframe(styled, use_container_width=True, hide_index=True)
-
-            # ── Sección envío de email ────────────────────────────────────────
-            st.markdown("---")
-            st.markdown("### 📧 Enviar líneas de pedido por email")
-
-            # Selector de filas
-            opciones_pedido = df_tarifa.apply(
-                lambda r: f"#{r.name} · Pedido {r.get('Pedido','')} · {r.get('Marketplace','')} · SKU {r.get('SKU','')} · {r.get('Estado','')}",
-                axis=1
-            ).tolist()
-
-            seleccionadas = st.multiselect(
-                "Selecciona las líneas a enviar:",
-                options=list(range(len(df_tarifa))),
-                format_func=lambda i: opciones_pedido[i],
-                key="email_rows_sel",
-            )
-
-            if seleccionadas:
-                df_sel = df_tarifa.iloc[seleccionadas].reset_index(drop=True)
-
-                # Detectar marketplace de las líneas seleccionadas
-                mps_sel = df_sel["Marketplace"].dropna().unique().tolist()
-                email_sugerido = ""
-                if len(mps_sel) == 1:
-                    email_sugerido = get_email_for_marketplace(mps_sel[0])
-
-                col_em1, col_em2 = st.columns([2, 1])
-                with col_em1:
-                    destinatario = st.text_input(
-                        "📬 Email destinatario",
-                        value=email_sugerido,
-                        placeholder="responsable@empresa.com",
-                        help="Se autocompleta según el marketplace. Puedes editarlo libremente.",
-                        key="email_dest",
-                    )
-                with col_em2:
-                    asunto = st.text_input(
-                        "✏️ Asunto",
-                        value=f"Revisión pedidos — {', '.join(mps_sel)}",
-                        key="email_asunto",
-                    )
-
-                st.caption(f"Se enviarán **{len(df_sel)}** línea(s) con adjunto Excel.")
-
-                # Credenciales desde secrets
-                remitente = st.secrets.get("EMAIL_REMITENTE", "")
-                password  = st.secrets.get("EMAIL_PASSWORD", "")
-
-                if not remitente or not password:
-                    st.warning("⚠️ Configura `EMAIL_REMITENTE` y `EMAIL_PASSWORD` en los Secrets de Streamlit.")
-                elif not destinatario:
-                    st.warning("⚠️ Introduce un email destinatario.")
-                else:
-                    if st.button("📤 Enviar email", type="primary", key="btn_send_email"):
-                        ok, msg_result = send_order_email(
-                            destinatario=destinatario,
-                            asunto=asunto,
-                            cuerpo_html="",
-                            df_lineas=df_sel,
-                            remitente=remitente,
-                            password=password,
-                        )
-                        if ok:
-                            st.success(msg_result)
-                        else:
-                            st.error(msg_result)
-            else:
-                st.info("Selecciona una o varias líneas de la tabla para enviar por email.")
+            st.dataframe(df_tarifa.style.map(color_status, subset=["Estado"]), use_container_width=True, hide_index=True)
+            email_widget(df_tarifa, "procA")
         else:
             st.info("No hay datos en Hoja2 para analizar.")
 
@@ -698,87 +691,44 @@ if not es_miravia:
         else:
             st.info("No hay datos en Hoja1.")
 
-    # ── Export
     st.markdown("---")
     sections = [
         ("Análisis Tarifa", df_tarifa, None),
-        ("Duplicados Hoja1",
-         dupes_h1 if len(dupes_h1) > 0 else None,
+        ("Duplicados Hoja1", dupes_h1 if len(dupes_h1) > 0 else None,
          "Sin duplicados encontrados" if len(dupes_h1) == 0 else f"⚠️ {len(dupes_h1)} duplicados detectados"),
         ("Hoja1 limpia", h1_clean, None),
     ]
     excel_bytes = build_excel([(s, d, t) for s, d, t in sections if d is not None or t is not None])
-    st.download_button(
-        "⬇️ Descargar Excel completo",
-        data=excel_bytes,
+    st.download_button("⬇️ Descargar Excel completo", data=excel_bytes,
         file_name=f"PagoAceptado_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        type="primary",
-    )
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", type="primary")
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# PROCESO B — Pago aceptado Miravia
+# DISPLAY B — Miravia
 # ═══════════════════════════════════════════════════════════════════════════════
 else:
-    with st.spinner("Procesando Miravia..."):
-        mir_bytes = miravia_file.read()
-        mir_sheets = pd.read_excel(io.BytesIO(mir_bytes), sheet_name=None)
-        hoja1_raw = mir_sheets.get("Hoja1", pd.DataFrame())
-        hoja2_raw = mir_sheets.get("Hoja2", pd.DataFrame())
+    df_tarifa        = R["df_tarifa"]
+    h1_clean         = R["h1_clean"]
+    dupes_comb       = R["dupes_comb"]
+    id_map           = R["id_map"]
+    df_cancel_match  = R["df_cancel_match"]
+    df_cancelados    = R["df_cancelados"]
+    multi_count      = R["multi_count"]
+    cancelados_prov  = R["cancelados_provided"]
 
-        # Load cancelados if provided
-        df_cancelados = None
-        if cancelados_file:
-            can_bytes = cancelados_file.read()
-            can_sheets = pd.read_excel(io.BytesIO(can_bytes), sheet_name=None)
-            df_cancelados = list(can_sheets.values())[0]
-
-        # Clean Hoja1
-        h1_clean = clean_hoja1(hoja1_raw) if not hoja1_raw.empty else pd.DataFrame()
-
-        # Duplicates Combination
-        dupes_comb, id_map = check_duplicates_miravia(h1_clean) if not h1_clean.empty else (pd.DataFrame(), {})
-
-        # Cross-reference cancelados
-        df_cancel_match = cross_miravia_cancelados(h1_clean, df_cancelados) if df_cancelados is not None else pd.DataFrame()
-
-        # Tarifa analysis (Hoja2 if exists)
-        df_tarifa = pd.DataFrame()
-        multi_count = 0
-        if not hoja2_raw.empty:
-            df_expanded = expand_multi_sku_rows(hoja2_raw)
-            results = []
-            for _, row in df_expanded.iterrows():
-                status, pvp_min, pvp_pub, diff_min, diff_pub, tarifa_sheet = analyze_row(
-                    row, nac_lookup, inter_lookups
-                )
-                results.append({
-                    "Pedido": row.get("Pedido", ""), "SKU Original": row.get("_sku_orig", ""),
-                    "SKU": row.get("Sku", ""), "SKU Norm.": row.get("_sku_norm", ""),
-                    "Multi-SKU": "✔" if row.get("_multi_flag") else "",
-                    "País": row.get("País", ""),
-                    "Precio Pedido (€)": parse_price(row.get("Pedido.1")),
-                    "Hoja Tarifa": tarifa_sheet,
-                    "PVP Mín (€)": pvp_min, "PVP Pub (€)": pvp_pub,
-                    "Dif vs Mín (€)": diff_min, "Estado": status,
-                })
-            df_tarifa = pd.DataFrame(results)
-            multi_count = df_expanded["_multi_flag"].sum()
-
-    # ── Display
     st.markdown("---")
     st.markdown("## 🏪 Pago aceptado Miravia — Resultados")
 
     col1, col2, col3, col4 = st.columns(4)
-    col1.metric("📋 Pedidos Miravia", len(h1_clean))
-    col2.metric("🔴 Cancelados match", len(df_cancel_match))
-    col3.metric("⚠️ Dupl. Combination", len(dupes_comb))
-    col4.metric("💰 Tarifa analizados", len(df_tarifa))
+    col1.metric("📋 Pedidos Miravia",    len(h1_clean))
+    col2.metric("🔴 Cancelados match",   len(df_cancel_match))
+    col3.metric("⚠️ Dupl. Combination",  len(dupes_comb))
+    col4.metric("💰 Tarifa analizados",  len(df_tarifa))
 
     tabs = st.tabs(["🔴 Cancelados", "⚠️ Duplicados Combination", "💰 Análisis Tarifa", "📄 Hoja1 limpia"])
 
     with tabs[0]:
-        if cancelados_file is None:
+        if not cancelados_prov:
             st.info("No se ha subido el fichero ES de cancelados.")
         elif len(df_cancel_match) > 0:
             st.error(f"🔴 **{len(df_cancel_match)}** pedidos Miravia encontrados en el fichero de cancelados")
@@ -799,101 +749,24 @@ else:
         if not df_tarifa.empty:
             if multi_count > 0:
                 st.info(f"🔀 **{multi_count}** líneas generadas por expansión de pedidos multi-SKU")
-
-            def color_status(val):
-                colors = {
-                    "✅ OK": "background-color:#d1fae5;color:#065f46",
-                    "🟡 EN MÍNIMO": "background-color:#fef3c7;color:#92400e",
-                    "🔴 BAJO MÍNIMO": "background-color:#fee2e2;color:#991b1b",
-                    "❌ NO EN TARIFA": "background-color:#fce7f3;color:#831843",
-                    "⚠️ SIN PRECIO": "background-color:#fef3c7;color:#92400e",
-                }
-                return colors.get(val, "")
-
-            styled = df_tarifa.style.map(color_status, subset=["Estado"])
-            st.dataframe(styled, use_container_width=True, hide_index=True)
-
-            # ── Sección envío de email ────────────────────────────────────────
-            st.markdown("---")
-            st.markdown("### 📧 Enviar líneas de pedido por email")
-
-            opciones_pedido_mir = df_tarifa.apply(
-                lambda r: f"#{r.name} · Pedido {r.get('Pedido','')} · SKU {r.get('SKU','')} · {r.get('Estado','')}",
-                axis=1
-            ).tolist()
-
-            seleccionadas_mir = st.multiselect(
-                "Selecciona las líneas a enviar:",
-                options=list(range(len(df_tarifa))),
-                format_func=lambda i: opciones_pedido_mir[i],
-                key="email_rows_mir",
-            )
-
-            if seleccionadas_mir:
-                df_sel_mir = df_tarifa.iloc[seleccionadas_mir].reset_index(drop=True)
-
-                email_sugerido_mir = get_email_for_marketplace("miravia")
-                col_em1m, col_em2m = st.columns([2, 1])
-                with col_em1m:
-                    destinatario_mir = st.text_input(
-                        "📬 Email destinatario",
-                        value=email_sugerido_mir,
-                        placeholder="responsable@empresa.com",
-                        key="email_dest_mir",
-                    )
-                with col_em2m:
-                    asunto_mir = st.text_input(
-                        "✏️ Asunto",
-                        value="Revisión pedidos — Miravia",
-                        key="email_asunto_mir",
-                    )
-
-                st.caption(f"Se enviarán **{len(df_sel_mir)}** línea(s) con adjunto Excel.")
-
-                remitente_mir = st.secrets.get("EMAIL_REMITENTE", "")
-                password_mir  = st.secrets.get("EMAIL_PASSWORD", "")
-
-                if not remitente_mir or not password_mir:
-                    st.warning("⚠️ Configura `EMAIL_REMITENTE` y `EMAIL_PASSWORD` en los Secrets de Streamlit.")
-                elif not destinatario_mir:
-                    st.warning("⚠️ Introduce un email destinatario.")
-                else:
-                    if st.button("📤 Enviar email", type="primary", key="btn_send_email_mir"):
-                        ok_mir, msg_mir = send_order_email(
-                            destinatario=destinatario_mir,
-                            asunto=asunto_mir,
-                            cuerpo_html="",
-                            df_lineas=df_sel_mir,
-                            remitente=remitente_mir,
-                            password=password_mir,
-                        )
-                        if ok_mir:
-                            st.success(msg_mir)
-                        else:
-                            st.error(msg_mir)
-            else:
-                st.info("Selecciona una o varias líneas de la tabla para enviar por email.")
+            st.dataframe(df_tarifa.style.map(color_status, subset=["Estado"]), use_container_width=True, hide_index=True)
+            email_widget(df_tarifa, "procB")
         else:
             st.info("Sin datos en Hoja2 para análisis de tarifa (habitual en Miravia).")
 
     with tabs[3]:
         st.dataframe(h1_clean, use_container_width=True, hide_index=True)
 
-    # ── Export
     st.markdown("---")
     sections = [
-        ("Cancelados Match", df_cancel_match if len(df_cancel_match) > 0 else None,
+        ("Cancelados Match",      df_cancel_match if len(df_cancel_match) > 0 else None,
          "Sin cancelados encontrados" if len(df_cancel_match) == 0 else None),
         ("Duplicados Combination", dupes_comb if len(dupes_comb) > 0 else None,
          "Sin duplicados en Combination" if len(dupes_comb) == 0 else None),
-        ("Análisis Tarifa", df_tarifa if not df_tarifa.empty else None, None),
-        ("Hoja1 limpia", h1_clean, None),
+        ("Análisis Tarifa",       df_tarifa if not df_tarifa.empty else None, None),
+        ("Hoja1 limpia",          h1_clean, None),
     ]
     excel_bytes = build_excel([(s, d, t) for s, d, t in sections if d is not None or t is not None])
-    st.download_button(
-        "⬇️ Descargar Excel completo",
-        data=excel_bytes,
+    st.download_button("⬇️ Descargar Excel completo", data=excel_bytes,
         file_name=f"PagoAceptadoMiravia_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        type="primary",
-    )
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", type="primary")
