@@ -2,6 +2,11 @@ import streamlit as st
 import pandas as pd
 import re
 import io
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.mime.base import MIMEBase
+from email import encoders
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment
 from openpyxl.utils import get_column_letter
@@ -62,6 +67,110 @@ COUNTRY_SHEETS = {
 COUNTRY_SHEET = {k: v[0] for k, v in COUNTRY_SHEETS.items()}
 SPAIN = {"España", "Spain", "ES"}
 NAC_ORDER = ["T_MIR", "T_AMZ", "T_C4", "T_MM", "T_PRIV"]
+
+# ── Email config: marketplace → email responsable ──────────────────────────────
+# Edita este diccionario con los emails reales de cada responsable.
+# La clave debe coincidir (case-insensitive) con el valor de la columna Marketplace.
+MARKETPLACE_EMAILS = {
+    "worten (beezup)":  "responsable.worten@empresa.com",
+    "aurgi":            "responsable.aurgi@empresa.com",
+    "b2x-85-shein":     "responsable.shein@empresa.com",
+    "amazon":           "responsable.amazon@empresa.com",
+    "miravia":          "responsable.miravia@empresa.com",
+    # Añade más según necesites:
+    # "carrefour":      "responsable.carrefour@empresa.com",
+}
+
+def get_email_for_marketplace(marketplace: str) -> str:
+    """Devuelve el email configurado para un marketplace, o cadena vacía si no hay."""
+    return MARKETPLACE_EMAILS.get(str(marketplace).strip().lower(), "")
+
+def send_order_email(destinatario: str, asunto: str, cuerpo_html: str,
+                     df_lineas: pd.DataFrame, remitente: str, password: str) -> tuple[bool, str]:
+    """
+    Envía un email con las líneas de pedido seleccionadas como tabla HTML
+    y adjunta un Excel con las mismas líneas.
+    Usa Gmail SMTP con contraseña de aplicación.
+    Devuelve (éxito: bool, mensaje: str).
+    """
+    try:
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = asunto
+        msg["From"] = remitente
+        msg["To"] = destinatario
+
+        # ── Construir tabla HTML con las líneas
+        def _td(v, bold=False, color=""):
+            style = f"padding:6px 10px;border:1px solid #e2e8f0;font-family:Arial,sans-serif;font-size:13px;"
+            if bold:
+                style += "font-weight:600;"
+            if color:
+                style += f"color:{color};"
+            return f"<td style='{style}'>{v}</td>"
+
+        STATUS_COLOR_MAP = {
+            "✅ OK": "#065f46",
+            "🟡 EN MÍNIMO": "#92400e",
+            "🔴 BAJO MÍNIMO": "#991b1b",
+            "❌ NO EN TARIFA": "#831843",
+            "⚠️ SIN PRECIO": "#92400e",
+        }
+
+        filas_html = ""
+        for _, row in df_lineas.iterrows():
+            estado = str(row.get("Estado", ""))
+            color_est = STATUS_COLOR_MAP.get(estado, "#1e293b")
+            bg = "#f8fafc" if _ % 2 == 0 else "#ffffff"
+            filas_html += f"<tr style='background:{bg}'>"
+            filas_html += _td(row.get("Pedido", ""))
+            filas_html += _td(row.get("Fecha", ""))
+            filas_html += _td(row.get("Marketplace", ""))
+            filas_html += _td(row.get("País", ""))
+            filas_html += _td(row.get("SKU", ""))
+            filas_html += _td(row.get("Cant", ""))
+            filas_html += _td(f"{row.get('Precio Pedido (€)', '')} €")
+            filas_html += _td(f"{row.get('PVP Mín (€)', '')} €")
+            filas_html += _td(estado, bold=True, color=color_est)
+            filas_html += _td(f"{row.get('Dif vs Mín (€)', '')} €")
+            filas_html += "</tr>"
+
+        th_style = "padding:7px 10px;background:#1B2A4A;color:#fff;font-family:Arial,sans-serif;font-size:12px;text-align:left;"
+        cabeceras = ["Pedido","Fecha","Marketplace","País","SKU","Cant","Precio (€)","PVP Mín (€)","Estado","Dif vs Mín (€)"]
+        ths = "".join(f"<th style='{th_style}'>{h}</th>" for h in cabeceras)
+
+        html = f"""
+        <html><body style="font-family:Arial,sans-serif;color:#1e293b;">
+        <h2 style="color:#1B2A4A;">📦 Revisión de pedidos — Análisis de Tarifa</h2>
+        <p>Se han detectado pedidos que requieren tu atención:</p>
+        <table style="border-collapse:collapse;width:100%;">
+          <thead><tr>{ths}</tr></thead>
+          <tbody>{filas_html}</tbody>
+        </table>
+        <br>
+        <p style="font-size:12px;color:#64748b;">
+          Generado automáticamente por <strong>Procesador de Pedidos</strong>.
+        </p>
+        </body></html>
+        """
+
+        msg.attach(MIMEText(html, "html", "utf-8"))
+
+        # ── Adjuntar Excel con las líneas
+        excel_bytes = build_excel([("Líneas pedido", df_lineas, None)])
+        part = MIMEBase("application", "octet-stream")
+        part.set_payload(excel_bytes)
+        encoders.encode_base64(part)
+        part.add_header("Content-Disposition", 'attachment; filename="lineas_pedido.xlsx"')
+        msg.attach(part)
+
+        # ── Enviar via Gmail SMTP
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+            server.login(remitente, password)
+            server.sendmail(remitente, destinatario, msg.as_string())
+
+        return True, f"✅ Email enviado correctamente a **{destinatario}**"
+    except Exception as e:
+        return False, f"❌ Error al enviar: {str(e)}"
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -500,6 +609,75 @@ if not es_miravia:
 
             styled = df_tarifa.style.map(color_status, subset=["Estado"])
             st.dataframe(styled, use_container_width=True, hide_index=True)
+
+            # ── Sección envío de email ────────────────────────────────────────
+            st.markdown("---")
+            st.markdown("### 📧 Enviar líneas de pedido por email")
+
+            # Selector de filas
+            opciones_pedido = df_tarifa.apply(
+                lambda r: f"#{r.name} · Pedido {r.get('Pedido','')} · {r.get('Marketplace','')} · SKU {r.get('SKU','')} · {r.get('Estado','')}",
+                axis=1
+            ).tolist()
+
+            seleccionadas = st.multiselect(
+                "Selecciona las líneas a enviar:",
+                options=list(range(len(df_tarifa))),
+                format_func=lambda i: opciones_pedido[i],
+                key="email_rows_sel",
+            )
+
+            if seleccionadas:
+                df_sel = df_tarifa.iloc[seleccionadas].reset_index(drop=True)
+
+                # Detectar marketplace de las líneas seleccionadas
+                mps_sel = df_sel["Marketplace"].dropna().unique().tolist()
+                email_sugerido = ""
+                if len(mps_sel) == 1:
+                    email_sugerido = get_email_for_marketplace(mps_sel[0])
+
+                col_em1, col_em2 = st.columns([2, 1])
+                with col_em1:
+                    destinatario = st.text_input(
+                        "📬 Email destinatario",
+                        value=email_sugerido,
+                        placeholder="responsable@empresa.com",
+                        help="Se autocompleta según el marketplace. Puedes editarlo libremente.",
+                        key="email_dest",
+                    )
+                with col_em2:
+                    asunto = st.text_input(
+                        "✏️ Asunto",
+                        value=f"Revisión pedidos — {', '.join(mps_sel)}",
+                        key="email_asunto",
+                    )
+
+                st.caption(f"Se enviarán **{len(df_sel)}** línea(s) con adjunto Excel.")
+
+                # Credenciales desde secrets
+                remitente = st.secrets.get("EMAIL_REMITENTE", "")
+                password  = st.secrets.get("EMAIL_PASSWORD", "")
+
+                if not remitente or not password:
+                    st.warning("⚠️ Configura `EMAIL_REMITENTE` y `EMAIL_PASSWORD` en los Secrets de Streamlit.")
+                elif not destinatario:
+                    st.warning("⚠️ Introduce un email destinatario.")
+                else:
+                    if st.button("📤 Enviar email", type="primary", key="btn_send_email"):
+                        ok, msg_result = send_order_email(
+                            destinatario=destinatario,
+                            asunto=asunto,
+                            cuerpo_html="",
+                            df_lineas=df_sel,
+                            remitente=remitente,
+                            password=password,
+                        )
+                        if ok:
+                            st.success(msg_result)
+                        else:
+                            st.error(msg_result)
+            else:
+                st.info("Selecciona una o varias líneas de la tabla para enviar por email.")
         else:
             st.info("No hay datos en Hoja2 para analizar.")
 
@@ -630,6 +808,67 @@ else:
 
             styled = df_tarifa.style.map(color_status, subset=["Estado"])
             st.dataframe(styled, use_container_width=True, hide_index=True)
+
+            # ── Sección envío de email ────────────────────────────────────────
+            st.markdown("---")
+            st.markdown("### 📧 Enviar líneas de pedido por email")
+
+            opciones_pedido_mir = df_tarifa.apply(
+                lambda r: f"#{r.name} · Pedido {r.get('Pedido','')} · SKU {r.get('SKU','')} · {r.get('Estado','')}",
+                axis=1
+            ).tolist()
+
+            seleccionadas_mir = st.multiselect(
+                "Selecciona las líneas a enviar:",
+                options=list(range(len(df_tarifa))),
+                format_func=lambda i: opciones_pedido_mir[i],
+                key="email_rows_mir",
+            )
+
+            if seleccionadas_mir:
+                df_sel_mir = df_tarifa.iloc[seleccionadas_mir].reset_index(drop=True)
+
+                email_sugerido_mir = get_email_for_marketplace("miravia")
+                col_em1m, col_em2m = st.columns([2, 1])
+                with col_em1m:
+                    destinatario_mir = st.text_input(
+                        "📬 Email destinatario",
+                        value=email_sugerido_mir,
+                        placeholder="responsable@empresa.com",
+                        key="email_dest_mir",
+                    )
+                with col_em2m:
+                    asunto_mir = st.text_input(
+                        "✏️ Asunto",
+                        value="Revisión pedidos — Miravia",
+                        key="email_asunto_mir",
+                    )
+
+                st.caption(f"Se enviarán **{len(df_sel_mir)}** línea(s) con adjunto Excel.")
+
+                remitente_mir = st.secrets.get("EMAIL_REMITENTE", "")
+                password_mir  = st.secrets.get("EMAIL_PASSWORD", "")
+
+                if not remitente_mir or not password_mir:
+                    st.warning("⚠️ Configura `EMAIL_REMITENTE` y `EMAIL_PASSWORD` en los Secrets de Streamlit.")
+                elif not destinatario_mir:
+                    st.warning("⚠️ Introduce un email destinatario.")
+                else:
+                    if st.button("📤 Enviar email", type="primary", key="btn_send_email_mir"):
+                        ok_mir, msg_mir = send_order_email(
+                            destinatario=destinatario_mir,
+                            asunto=asunto_mir,
+                            cuerpo_html="",
+                            df_lineas=df_sel_mir,
+                            remitente=remitente_mir,
+                            password=password_mir,
+                        )
+                        if ok_mir:
+                            st.success(msg_mir)
+                        else:
+                            st.error(msg_mir)
+            else:
+                st.info("Selecciona una o varias líneas de la tabla para enviar por email.")
         else:
             st.info("Sin datos en Hoja2 para análisis de tarifa (habitual en Miravia).")
 
