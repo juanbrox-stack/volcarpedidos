@@ -194,19 +194,22 @@ def load_tarifa(file_bytes, filename):
     return pd.read_excel(io.BytesIO(file_bytes), sheet_name=None)
 
 def build_sheet_lookup(df, sheet_name):
-    """Build {sku_str: {min, pub, sheet}} lookup for a SINGLE tarifa sheet"""
     lookup = {}
     ref_cols = [c for c in df.columns if str(c).strip() == "REFERENCIA"]
     if not ref_cols:
         return lookup
     ref_col = ref_cols[0]
+    # Normalizar nombres de columnas PVP (con o sin punto final)
+    col_map = {str(c).strip().rstrip("."): c for c in df.columns}
+    pvp_min_col = col_map.get("PVP MIN")
+    pvp_pub_col = col_map.get("PVP PUB")
     for _, r in df.iterrows():
         key = str(r[ref_col]).strip()
         if key:
             try:
                 lookup[key] = {
-                    "min": float(r.get("PVP MIN.", 0)),
-                    "pub": float(r.get("PVP PUB.", 0)),
+                    "min": float(r[pvp_min_col]) if pvp_min_col else 0,
+                    "pub": float(r[pvp_pub_col]) if pvp_pub_col else 0,
                     "sheet": sheet_name,
                 }
             except:
