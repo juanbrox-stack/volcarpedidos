@@ -2,11 +2,6 @@ import streamlit as st
 import pandas as pd
 import re
 import io
-import smtplib
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
-from email.mime.base import MIMEBase
-from email import encoders
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment
 from openpyxl.utils import get_column_letter
@@ -65,81 +60,30 @@ COUNTRY_SHEETS = {
 }
 # Keep old name as alias for any remaining references
 COUNTRY_SHEET = {k: v[0] for k, v in COUNTRY_SHEETS.items()}
-SPAIN = {"España", "Spain", "ES"}
-NAC_ORDER = ["T_MIR", "T_AMZ", "T_C4", "T_MM", "T_PRIV"]
 
-# ── Email: marketplace → responsable ──────────────────────────────────────────
-# Clave en minúsculas, debe coincidir con el valor de la columna Marketplace.
-MARKETPLACE_EMAILS = {
-    "worten (beezup)":  "responsable.worten@empresa.com",
-    "aurgi":            "responsable.aurgi@empresa.com",
-    "b2x-85-shein":     "responsable.shein@empresa.com",
-    "amazon":           "responsable.amazon@empresa.com",
-    "miravia":          "responsable.miravia@empresa.com",
+# Maps marketplace name (substring match) -> national tarifa sheet to search FIRST
+# The rest of NAC_ORDER is searched as fallback if SKU not found in primary sheet
+MARKETPLACE_NAC_SHEET = {
+    "carrefour":  "T_C4",
+    "amazon":     "T_AMZ",
+    "mediamarkt": "T_MM",
+    "privalia":   "T_PRIV",
+    # Mirakl/BeezUP/Showroomprive/default -> T_MIR (first in NAC_ORDER)
 }
 
-def get_email_for_marketplace(marketplace: str) -> str:
-    return MARKETPLACE_EMAILS.get(str(marketplace).strip().lower(), "")
-
-def send_order_email(destinatario, asunto, df_lineas, remitente, password):
-    try:
-        msg = MIMEMultipart("alternative")
-        msg["Subject"] = asunto
-        msg["From"]    = remitente
-        msg["To"]      = destinatario
-
-        STATUS_COLOR_MAP = {
-            "✅ OK":           "#065f46",
-            "🟡 EN MÍNIMO":    "#92400e",
-            "🔴 BAJO MÍNIMO":  "#991b1b",
-            "❌ NO EN TARIFA": "#831843",
-            "⚠️ SIN PRECIO":   "#92400e",
-        }
-        th_style = "padding:7px 10px;background:#1B2A4A;color:#fff;font-family:Arial,sans-serif;font-size:12px;text-align:left;"
-        td_style = "padding:6px 10px;border:1px solid #e2e8f0;font-family:Arial,sans-serif;font-size:13px;"
-        cabeceras = ["Pedido","Fecha","Marketplace","País","SKU","Cant","Precio (€)","PVP Mín (€)","Estado","Dif vs Mín (€)"]
-        ths = "".join(f"<th style='{th_style}'>{h}</th>" for h in cabeceras)
-
-        filas_html = ""
-        for i, (_, row) in enumerate(df_lineas.iterrows()):
-            estado = str(row.get("Estado", ""))
-            color_est = STATUS_COLOR_MAP.get(estado, "#1e293b")
-            bg = "#f8fafc" if i % 2 == 0 else "#ffffff"
-            def td(v, bold=False, color=""):
-                s = td_style + (f"font-weight:600;" if bold else "") + (f"color:{color};" if color else "")
-                return f"<td style='{s}'>{v}</td>"
-            filas_html += f"<tr style='background:{bg}'>"
-            filas_html += td(row.get("Pedido","")) + td(row.get("Fecha","")) + td(row.get("Marketplace",""))
-            filas_html += td(row.get("País","")) + td(row.get("SKU","")) + td(row.get("Cant",""))
-            filas_html += td(f"{row.get('Precio Pedido (€)','')} €") + td(f"{row.get('PVP Mín (€)','')} €")
-            filas_html += td(estado, bold=True, color=color_est) + td(f"{row.get('Dif vs Mín (€)','')} €")
-            filas_html += "</tr>"
-
-        html = f"""<html><body style="font-family:Arial,sans-serif;color:#1e293b;">
-        <h2 style="color:#1B2A4A;">📦 Revisión de pedidos — Análisis de Tarifa</h2>
-        <p>Se han detectado pedidos que requieren tu atención:</p>
-        <table style="border-collapse:collapse;width:100%;">
-          <thead><tr>{ths}</tr></thead><tbody>{filas_html}</tbody>
-        </table>
-        <br><p style="font-size:12px;color:#64748b;">Generado automáticamente por <strong>Procesador de Pedidos</strong>.</p>
-        </body></html>"""
-        msg.attach(MIMEText(html, "html", "utf-8"))
-
-        # Adjunto Excel
-        excel_bytes = build_excel([("Líneas pedido", df_lineas, None)])
-        part = MIMEBase("application", "octet-stream")
-        part.set_payload(excel_bytes)
-        encoders.encode_base64(part)
-        part.add_header("Content-Disposition", 'attachment; filename="lineas_pedido.xlsx"')
-        msg.attach(part)
-
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
-            server.login(remitente, password)
-            server.sendmail(remitente, destinatario, msg.as_string())
-
-        return True, f"✅ Email enviado correctamente a **{destinatario}**"
-    except Exception as e:
-        return False, f"❌ Error al enviar: {str(e)}"
+def nac_order_for_marketplace(marketplace: str) -> list:
+    """Return NAC_ORDER reordered so the channel-specific sheet is searched first."""
+    mkt_lower = str(marketplace).lower()
+    primary = None
+    for keyword, sheet in MARKETPLACE_NAC_SHEET.items():
+        if keyword in mkt_lower:
+            primary = sheet
+            break
+    if primary is None:
+        return NAC_ORDER  # default: T_MIR first
+    return [primary] + [s for s in NAC_ORDER if s != primary]
+SPAIN = {"España", "Spain", "ES"}
+NAC_ORDER = ["T_MIR", "T_AMZ", "T_C4", "T_MM", "T_PRIV"]
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -194,22 +138,19 @@ def load_tarifa(file_bytes, filename):
     return pd.read_excel(io.BytesIO(file_bytes), sheet_name=None)
 
 def build_sheet_lookup(df, sheet_name):
+    """Build {sku_str: {min, pub, sheet}} lookup for a SINGLE tarifa sheet"""
     lookup = {}
     ref_cols = [c for c in df.columns if str(c).strip() == "REFERENCIA"]
     if not ref_cols:
         return lookup
     ref_col = ref_cols[0]
-    # Normalizar nombres de columnas PVP (con o sin punto final)
-    col_map = {str(c).strip().rstrip("."): c for c in df.columns}
-    pvp_min_col = col_map.get("PVP MIN")
-    pvp_pub_col = col_map.get("PVP PUB")
     for _, r in df.iterrows():
         key = str(r[ref_col]).strip()
         if key:
             try:
                 lookup[key] = {
-                    "min": float(r[pvp_min_col]) if pvp_min_col else 0,
-                    "pub": float(r[pvp_pub_col]) if pvp_pub_col else 0,
+                    "min": float(r.get("PVP MIN.", 0)),
+                    "pub": float(r.get("PVP PUB.", 0)),
                     "sheet": sheet_name,
                 }
             except:
@@ -217,28 +158,34 @@ def build_sheet_lookup(df, sheet_name):
     return lookup
 
 def build_lookup(sheets, order):
-    """Build merged {sku_str: {min, pub, sheet}} from multiple sheets (national use)"""
-    lookup = {}
+    """Build per-sheet lookup {sheet_name: {sku: {min, pub, sheet}}} for national tarifa.
+    Keeps each sheet isolated so marketplace-aware ordering works correctly."""
+    result = {}
     for sh in order:
         df = sheets.get(sh)
         if df is None:
             continue
-        for key, val in build_sheet_lookup(df, sh).items():
-            if key not in lookup:   # first sheet in order wins
-                lookup[key] = val
-    return lookup
+        result[sh] = build_sheet_lookup(df, sh)
+    return result
 
-def get_pvp(sku_norm, pais, nac_lookup, inter_lookups):
+def get_pvp(sku_norm, pais, nac_lookup, inter_lookups, marketplace=""):
     """
     Find PVP for a normalized SKU.
-    - Spain: national tarifa only (T_MIR → T_AMZ → T_C4 → ...).
+    - Spain: searches national sheets ordered by marketplace channel:
+        Carrefour → T_C4 first, Amazon → T_AMZ first, Mediamarkt → T_MM first,
+        Privalia → T_PRIV first, others → T_MIR first. Remaining sheets as fallback.
     - Other countries: search each sheet in COUNTRY_SHEETS list in order.
-      Italia → [ES-IT, IT-IT], Francia → [ES-FR, FR-FR], Alemania → [ES-DE, DE-DE].
-      If not found in any of the country's sheets → ❌ NO EN TARIFA.
-      No cross-country fallback — a Portuguese price is never used for an Italian order.
+        Italia → [ES-IT, IT-IT], Francia → [ES-FR, FR-FR], Alemania → [ES-DE, DE-DE].
+        If not found in any of the country's sheets → ❌ NO EN TARIFA.
+        No cross-country fallback.
     """
     if pais in SPAIN:
-        return nac_lookup.get(sku_norm)
+        order = nac_order_for_marketplace(marketplace)
+        for sh in order:
+            lkp = nac_lookup.get(sh, {})
+            if sku_norm in lkp:
+                return lkp[sku_norm]
+        return None
 
     sheets_for_country = COUNTRY_SHEETS.get(pais)
     if sheets_for_country:
@@ -246,18 +193,23 @@ def get_pvp(sku_norm, pais, nac_lookup, inter_lookups):
             lkp = inter_lookups.get(sheet_key, {})
             if sku_norm in lkp:
                 return lkp[sku_norm]
-        # SKU not in any sheet for this country
         return None
 
     # Country not mapped → try national as best guess
-    return nac_lookup.get(sku_norm)
+    order = nac_order_for_marketplace(marketplace)
+    for sh in order:
+        lkp = nac_lookup.get(sh, {})
+        if sku_norm in lkp:
+            return lkp[sku_norm]
+    return None
 
 def analyze_row(row, nac_lookup, inter_lookups):
     sku_norm = row["_sku_norm"]
     pais = str(row.get("País", "")).strip()
     price = parse_price(row.get("Pedido.1"))
+    marketplace = str(row.get("Marketplace", ""))
 
-    pvp = get_pvp(sku_norm, pais, nac_lookup, inter_lookups)
+    pvp = get_pvp(sku_norm, pais, nac_lookup, inter_lookups, marketplace)
 
     if pvp is None:
         return "❌ NO EN TARIFA", None, None, None, None, "CANCELAR"
@@ -452,7 +404,7 @@ with st.sidebar:
 # ═══════════════════════════════════════════════════════════════════════════════
 st.title("📦 Procesador de Pedidos")
 
-if not run_btn and "results" not in st.session_state:
+if not run_btn:
     st.info("👈 Selecciona el proceso y sube los ficheros en el panel lateral. Luego pulsa **Procesar**.")
     st.markdown("""
     #### Proceso A — Pago aceptado
@@ -468,216 +420,169 @@ if not run_btn and "results" not in st.session_state:
     """)
     st.stop()
 
-# ── Si se pulsa Procesar: validar, calcular y guardar en session_state ─────────
-if run_btn:
-    errors = []
-    if not nac_file:   errors.append("Tarifa Nacional")
-    if not inter_file: errors.append("Tarifa Internacional")
-    if not es_miravia and not libro_file:   errors.append("Fichero Rentabilidad")
-    if es_miravia     and not miravia_file: errors.append("PagoAceptadoMiravia.xlsx")
-    if errors:
-        st.error(f"Faltan ficheros: {', '.join(errors)}")
-        st.stop()
+# ── Validate uploads ──────────────────────────────────────────────────────────
+errors = []
+if not nac_file: errors.append("Tarifa Nacional")
+if not inter_file: errors.append("Tarifa Internacional")
+if not es_miravia and not libro_file: errors.append("Fichero Rentabilidad")
+if es_miravia and not miravia_file: errors.append("PagoAceptadoMiravia.xlsx")
 
-    # Tarifas
-    with st.spinner("Cargando tarifas..."):
-        nac_sheets   = load_tarifa(nac_file.read(),   nac_file.name)
-        inter_sheets = load_tarifa(inter_file.read(), inter_file.name)
-        nac_lookup   = build_lookup(nac_sheets, NAC_ORDER)
-        inter_lookups = {sh: build_sheet_lookup(df, sh) for sh, df in inter_sheets.items()}
-
-    if not es_miravia:
-        with st.spinner("Procesando..."):
-            libro_bytes  = libro_file.read()
-            libro_sheets = pd.read_excel(io.BytesIO(libro_bytes), sheet_name=None)
-            hoja1_raw    = libro_sheets.get("Hoja1", pd.DataFrame())
-            hoja2_raw    = libro_sheets.get("Hoja2", pd.DataFrame())
-            sheet_names  = list(libro_sheets.keys())
-            if "Hoja2" not in libro_sheets and len(sheet_names) > 1:
-                hoja2_raw = libro_sheets[sheet_names[1]]
-
-            h1_clean  = clean_hoja1(hoja1_raw) if not hoja1_raw.empty else pd.DataFrame()
-            dupes_h1  = check_duplicates_hoja1(h1_clean) if not h1_clean.empty else pd.DataFrame()
-
-            df_tarifa   = pd.DataFrame()
-            multi_count = 0
-            if not hoja2_raw.empty:
-                df_expanded = expand_multi_sku_rows(hoja2_raw)
-                results = []
-                for _, row in df_expanded.iterrows():
-                    status, pvp_min, pvp_pub, diff_min, diff_pub, tarifa_sheet = analyze_row(row, nac_lookup, inter_lookups)
-                    results.append({
-                        "Pedido": row.get("Pedido",""), "Fecha": row.get("Fecha",""),
-                        "Marketplace": row.get("Marketplace",""), "Id Marketplace": row.get("Id Marketplace",""),
-                        "País": row.get("País",""), "SKU Original": row.get("_sku_orig", row.get("Sku","")),
-                        "SKU": row.get("Sku",""), "SKU Norm.": row.get("_sku_norm",""),
-                        "Multi-SKU": "✔" if row.get("_multi_flag") else "",
-                        "Cant": row.get("Cant",""), "Precio Pedido (€)": parse_price(row.get("Pedido.1")),
-                        "Hoja Tarifa": tarifa_sheet, "PVP Mín (€)": pvp_min, "PVP Pub (€)": pvp_pub,
-                        "Dif vs Mín (€)": diff_min, "Dif vs Pub (€)": diff_pub, "Estado": status,
-                    })
-                df_tarifa   = pd.DataFrame(results)
-                multi_count = int(df_expanded["_multi_flag"].sum())
-
-        st.session_state["results"] = {
-            "tipo": "A", "nac_count": len(nac_lookup),
-            "inter_count": sum(len(v) for v in inter_lookups.values()),
-            "h1_clean": h1_clean, "dupes_h1": dupes_h1,
-            "df_tarifa": df_tarifa, "multi_count": multi_count,
-        }
-
-    else:  # Miravia
-        with st.spinner("Procesando Miravia..."):
-            mir_bytes    = miravia_file.read()
-            mir_sheets   = pd.read_excel(io.BytesIO(mir_bytes), sheet_name=None)
-            hoja1_raw    = mir_sheets.get("Hoja1", pd.DataFrame())
-            hoja2_raw    = mir_sheets.get("Hoja2", pd.DataFrame())
-
-            df_cancelados = None
-            if cancelados_file:
-                can_bytes  = cancelados_file.read()
-                can_sheets = pd.read_excel(io.BytesIO(can_bytes), sheet_name=None)
-                df_cancelados = list(can_sheets.values())[0]
-
-            h1_clean       = clean_hoja1(hoja1_raw) if not hoja1_raw.empty else pd.DataFrame()
-            dupes_comb, id_map = check_duplicates_miravia(h1_clean) if not h1_clean.empty else (pd.DataFrame(), {})
-            df_cancel_match = cross_miravia_cancelados(h1_clean, df_cancelados) if df_cancelados is not None else pd.DataFrame()
-
-            df_tarifa   = pd.DataFrame()
-            multi_count = 0
-            if not hoja2_raw.empty:
-                df_expanded = expand_multi_sku_rows(hoja2_raw)
-                results = []
-                for _, row in df_expanded.iterrows():
-                    status, pvp_min, pvp_pub, diff_min, diff_pub, tarifa_sheet = analyze_row(row, nac_lookup, inter_lookups)
-                    results.append({
-                        "Pedido": row.get("Pedido",""), "SKU Original": row.get("_sku_orig",""),
-                        "SKU": row.get("Sku",""), "SKU Norm.": row.get("_sku_norm",""),
-                        "Multi-SKU": "✔" if row.get("_multi_flag") else "",
-                        "País": row.get("País",""), "Precio Pedido (€)": parse_price(row.get("Pedido.1")),
-                        "Hoja Tarifa": tarifa_sheet, "PVP Mín (€)": pvp_min, "PVP Pub (€)": pvp_pub,
-                        "Dif vs Mín (€)": diff_min, "Estado": status,
-                    })
-                df_tarifa   = pd.DataFrame(results)
-                multi_count = int(df_expanded["_multi_flag"].sum())
-
-        st.session_state["results"] = {
-            "tipo": "B", "nac_count": len(nac_lookup),
-            "inter_count": sum(len(v) for v in inter_lookups.values()),
-            "h1_clean": h1_clean, "dupes_comb": dupes_comb, "id_map": id_map,
-            "df_cancel_match": df_cancel_match, "df_cancelados": df_cancelados,
-            "cancelados_provided": cancelados_file is not None,
-            "df_tarifa": df_tarifa, "multi_count": multi_count,
-        }
-
-# ── Leer resultados de session_state y mostrar ────────────────────────────────
-if "results" not in st.session_state:
+if errors:
+    st.error(f"Faltan ficheros: {', '.join(errors)}")
     st.stop()
 
-R = st.session_state["results"]
+# ── Load tarifas ──────────────────────────────────────────────────────────────
+with st.spinner("Cargando tarifas..."):
+    nac_sheets = load_tarifa(nac_file.read(), nac_file.name)
+    inter_sheets = load_tarifa(inter_file.read(), inter_file.name)
 
-st.success(f"✅ Tarifas cargadas — Nacional: {R['nac_count']:,} SKUs | Internacional: {R['inter_count']:,} refs")
+    # Build lookups
+    nac_lookup = build_lookup(nac_sheets, NAC_ORDER)
+    # Each inter sheet gets its own isolated lookup — never mixed
+    inter_lookups = {sh: build_sheet_lookup(df, sh) for sh, df in inter_sheets.items()}
 
-# ── Widget email reutilizable ─────────────────────────────────────────────────
-def email_widget(df_tarifa, key_prefix):
-    """Muestra selector de líneas + formulario de envío de email."""
-    st.markdown("---")
-    st.markdown("### 📧 Enviar líneas de pedido por email")
-
-    opciones = df_tarifa.apply(
-        lambda r: f"Pedido {r.get('Pedido','')} · {r.get('Marketplace', r.get('País',''))} · SKU {r.get('SKU','')} · {r.get('Estado','')}",
-        axis=1
-    ).tolist()
-
-    seleccionadas = st.multiselect(
-        "Selecciona las líneas a enviar:",
-        options=list(range(len(df_tarifa))),
-        format_func=lambda i: opciones[i],
-        key=f"{key_prefix}_rows",
-    )
-
-    if not seleccionadas:
-        st.info("Selecciona una o varias líneas de la tabla para enviar por email.")
-        return
-
-    df_sel = df_tarifa.iloc[seleccionadas].reset_index(drop=True)
-
-    # Autocompletar email si todas las líneas son del mismo marketplace
-    mps = df_sel["Marketplace"].dropna().unique().tolist() if "Marketplace" in df_sel.columns else []
-    email_auto = get_email_for_marketplace(mps[0]) if len(mps) == 1 else ""
-    asunto_auto = f"Revisión pedidos — {', '.join(mps)}" if mps else "Revisión pedidos"
-
-    col1, col2 = st.columns([2, 1])
-    with col1:
-        destinatario = st.text_input(
-            "📬 Email destinatario",
-            value=email_auto,
-            placeholder="responsable@empresa.com",
-            help="Se autocompleta según el marketplace. Editable libremente.",
-            key=f"{key_prefix}_dest",
-        )
-    with col2:
-        asunto = st.text_input("✏️ Asunto", value=asunto_auto, key=f"{key_prefix}_asunto")
-
-    st.caption(f"Se enviarán **{len(df_sel)}** línea(s) con adjunto Excel.")
-
-    remitente = st.secrets.get("correo", {}).get("usuario", "")
-    password  = st.secrets.get("correo", {}).get("password", "")
-
-    if not remitente or not password:
-        st.warning("⚠️ Configura el bloque `[correo]` en los Secrets de Streamlit.")
-    elif not destinatario:
-        st.warning("⚠️ Introduce un email destinatario.")
-    else:
-        if st.button("📤 Enviar email", type="primary", key=f"{key_prefix}_send"):
-            ok, msg_result = send_order_email(destinatario, asunto, df_sel, remitente, password)
-            if ok:
-                st.success(msg_result)
-            else:
-                st.error(msg_result)
-
-# ─────────────────────────────────────────────────────────────────────────────
-def color_status(val):
-    colors = {
-        "✅ OK":           "background-color:#d1fae5;color:#065f46",
-        "🟡 EN MÍNIMO":    "background-color:#fef3c7;color:#92400e",
-        "🔴 BAJO MÍNIMO":  "background-color:#fee2e2;color:#991b1b",
-        "❌ NO EN TARIFA": "background-color:#fce7f3;color:#831843",
-        "⚠️ SIN PRECIO":   "background-color:#fef3c7;color:#92400e",
-    }
-    return colors.get(val, "")
+st.success(f"✅ Tarifas cargadas — Nacional: {sum(len(v) for v in nac_lookup.values()):,} SKUs | Internacional: {sum(len(v) for v in inter_lookups.values()):,} refs")
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# DISPLAY A
+# PROCESO A — Pago aceptado
 # ═══════════════════════════════════════════════════════════════════════════════
-if R["tipo"] == "A":
-    df_tarifa   = R["df_tarifa"]
-    h1_clean    = R["h1_clean"]
-    dupes_h1    = R["dupes_h1"]
-    multi_count = R["multi_count"]
+if not es_miravia:
+    with st.spinner("Procesando..."):
+        libro_bytes = libro_file.read()
+        libro_sheets = pd.read_excel(io.BytesIO(libro_bytes), sheet_name=None)
 
+        hoja1_raw = libro_sheets.get("Hoja1", pd.DataFrame())
+        hoja2_raw = libro_sheets.get("Hoja2", pd.DataFrame())
+        # Detect alternate sheet names (Rentabilidad might have different names)
+        sheet_names = list(libro_sheets.keys())
+        if "Hoja2" not in libro_sheets and len(sheet_names) > 1:
+            hoja2_raw = libro_sheets[sheet_names[1]]
+
+        # ── Clean Hoja1
+        h1_clean = clean_hoja1(hoja1_raw) if not hoja1_raw.empty else pd.DataFrame()
+
+        # ── Duplicates Hoja1
+        dupes_h1 = check_duplicates_hoja1(h1_clean) if not h1_clean.empty else pd.DataFrame()
+
+        # ── Expand multi-SKU and analyse tarifa
+        if not hoja2_raw.empty:
+            df_expanded = expand_multi_sku_rows(hoja2_raw)
+            results = []
+            for _, row in df_expanded.iterrows():
+                status, pvp_min, pvp_pub, diff_min, diff_pub, tarifa_sheet = analyze_row(
+                    row, nac_lookup, inter_lookups
+                )
+                results.append({
+                    "Pedido": row.get("Pedido", ""),
+                    "Fecha": row.get("Fecha", ""),
+                    "Marketplace": row.get("Marketplace", ""),
+                    "Id Marketplace": row.get("Id Marketplace", ""),
+                    "País": row.get("País", ""),
+                    "SKU Original": row.get("_sku_orig", row.get("Sku", "")),
+                    "SKU": row.get("Sku", ""),
+                    "SKU Norm.": row.get("_sku_norm", ""),
+                    "Multi-SKU": "✔" if row.get("_multi_flag") else "",
+                    "Cant": row.get("Cant", ""),
+                    "Precio Pedido (€)": parse_price(row.get("Pedido.1")),
+                    "Hoja Tarifa": tarifa_sheet,
+                    "PVP Mín (€)": pvp_min,
+                    "PVP Pub (€)": pvp_pub,
+                    "Dif vs Mín (€)": diff_min,
+                    "Dif vs Pub (€)": diff_pub,
+                    "Estado": status,
+                })
+            df_tarifa = pd.DataFrame(results)
+            multi_count = df_expanded["_multi_flag"].sum()
+        else:
+            df_tarifa = pd.DataFrame()
+            multi_count = 0
+
+    # ── Display
     st.markdown("---")
     st.markdown("## 🛒 Pago aceptado — Resultados")
 
-    ok     = (df_tarifa["Estado"] == "✅ OK").sum() if not df_tarifa.empty else 0
-    warn   = (df_tarifa["Estado"].str.startswith("🔴").sum() + df_tarifa["Estado"].str.startswith("🟡").sum()) if not df_tarifa.empty else 0
+    ok = (df_tarifa["Estado"] == "✅ OK").sum() if not df_tarifa.empty else 0
+    warn = df_tarifa["Estado"].str.startswith("🔴").sum() + df_tarifa["Estado"].str.startswith("🟡").sum() if not df_tarifa.empty else 0
     cancel = df_tarifa["Estado"].str.startswith("❌").sum() if not df_tarifa.empty else 0
 
     col1, col2, col3, col4, col5 = st.columns(5)
-    col1.metric("📋 Hoja1 filas",    len(h1_clean))
-    col2.metric("⚠️ Duplicados",     len(dupes_h1))
-    col3.metric("✅ OK tarifa",       ok)
-    col4.metric("🔴 Bajo mínimo",    warn)
-    col5.metric("❌ No en tarifa",   cancel)
+    col1.metric("📋 Hoja1 filas", len(h1_clean))
+    col2.metric("⚠️ Duplicados", len(dupes_h1))
+    col3.metric("✅ OK tarifa", ok)
+    col4.metric("🔴 Bajo mínimo", warn)
+    col5.metric("❌ No en tarifa", cancel)
 
+    # Tabs
     tab1, tab2, tab3 = st.tabs(["💰 Análisis Tarifa", "🔍 Duplicados Hoja1", "📄 Hoja1 limpia"])
 
     with tab1:
         if not df_tarifa.empty:
             if multi_count > 0:
                 st.info(f"🔀 Se han expandido pedidos multi-SKU: **{multi_count}** líneas generadas por separación de SKUs en la misma celda")
-            st.dataframe(df_tarifa.style.map(color_status, subset=["Estado"]), use_container_width=True, hide_index=True)
-            email_widget(df_tarifa, "procA")
+
+            def color_status(val):
+                colors = {
+                    "✅ OK": "background-color:#d1fae5;color:#065f46",
+                    "🟡 EN MÍNIMO": "background-color:#fef3c7;color:#92400e",
+                    "🔴 BAJO MÍNIMO": "background-color:#fee2e2;color:#991b1b",
+                    "❌ NO EN TARIFA": "background-color:#fce7f3;color:#831843",
+                    "⚠️ SIN PRECIO": "background-color:#fef3c7;color:#92400e",
+                }
+                return colors.get(val, "")
+
+            styled = df_tarifa.style.map(color_status, subset=["Estado"])
+            st.dataframe(styled, use_container_width=True, hide_index=True)
+
+            # ── Cancelados tracker ────────────────────────────────────────────
+            df_cancel_rows = df_tarifa[df_tarifa["Estado"].str.startswith("❌")].copy()
+            if not df_cancel_rows.empty:
+                st.markdown("---")
+                st.markdown("### 📋 Gestión de cancelados")
+                st.caption("Marca cada cancelado como enviado al canal. Los enviados quedan sombreados.")
+
+                if "cancelados_enviados_a" not in st.session_state:
+                    st.session_state["cancelados_enviados_a"] = set()
+
+                col_mark, col_clear = st.columns([1, 4])
+                with col_mark:
+                    if st.button("✅ Marcar todos como enviados", key="mark_all_a"):
+                        st.session_state["cancelados_enviados_a"] = set(df_cancel_rows.index.tolist())
+                with col_clear:
+                    if st.button("↩ Limpiar marcas", key="clear_a"):
+                        st.session_state["cancelados_enviados_a"] = set()
+
+                for i, (idx, row) in enumerate(df_cancel_rows.iterrows()):
+                    enviado = idx in st.session_state["cancelados_enviados_a"]
+                    bg = "#f0fdf4" if enviado else "#fff1f2"
+                    border = "#86efac" if enviado else "#fca5a5"
+                    icon = "✅" if enviado else "⬜"
+                    with st.container():
+                        st.markdown(
+                            f"""<div style="background:{bg};border:1.5px solid {border};border-radius:8px;
+                            padding:10px 16px;margin-bottom:6px;display:flex;align-items:center;gap:12px;">
+                            <span style="font-size:13px;color:#374151;">
+                            <b>Pedido {row.get('Pedido','')}</b> &nbsp;·&nbsp;
+                            {row.get('Marketplace','')} &nbsp;·&nbsp;
+                            {row.get('Id Marketplace','')} &nbsp;·&nbsp;
+                            SKU <code>{row.get('SKU Original','')}</code> &nbsp;·&nbsp;
+                            {row.get('País','')}
+                            </span>
+                            <span style="margin-left:auto;font-weight:600;color:{'#15803d' if enviado else '#9f1239'}">
+                            {'Enviado' if enviado else 'Pendiente'}
+                            </span></div>""",
+                            unsafe_allow_html=True
+                        )
+                        checked = st.checkbox(
+                            f"{icon} Enviado al canal",
+                            value=enviado,
+                            key=f"cancel_a_{idx}_{i}",
+                        )
+                        if checked and idx not in st.session_state["cancelados_enviados_a"]:
+                            st.session_state["cancelados_enviados_a"].add(idx)
+                            st.rerun()
+                        elif not checked and idx in st.session_state["cancelados_enviados_a"]:
+                            st.session_state["cancelados_enviados_a"].discard(idx)
+                            st.rerun()
         else:
             st.info("No hay datos en Hoja2 para analizar.")
 
@@ -694,48 +599,134 @@ if R["tipo"] == "A":
         else:
             st.info("No hay datos en Hoja1.")
 
+    # ── Export
     st.markdown("---")
     sections = [
         ("Análisis Tarifa", df_tarifa, None),
-        ("Duplicados Hoja1", dupes_h1 if len(dupes_h1) > 0 else None,
+        ("Duplicados Hoja1",
+         dupes_h1 if len(dupes_h1) > 0 else None,
          "Sin duplicados encontrados" if len(dupes_h1) == 0 else f"⚠️ {len(dupes_h1)} duplicados detectados"),
         ("Hoja1 limpia", h1_clean, None),
     ]
     excel_bytes = build_excel([(s, d, t) for s, d, t in sections if d is not None or t is not None])
-    st.download_button("⬇️ Descargar Excel completo", data=excel_bytes,
+    st.download_button(
+        "⬇️ Descargar Excel completo",
+        data=excel_bytes,
         file_name=f"PagoAceptado_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", type="primary")
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        type="primary",
+    )
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# DISPLAY B — Miravia
+# PROCESO B — Pago aceptado Miravia
 # ═══════════════════════════════════════════════════════════════════════════════
 else:
-    df_tarifa        = R["df_tarifa"]
-    h1_clean         = R["h1_clean"]
-    dupes_comb       = R["dupes_comb"]
-    id_map           = R["id_map"]
-    df_cancel_match  = R["df_cancel_match"]
-    df_cancelados    = R["df_cancelados"]
-    multi_count      = R["multi_count"]
-    cancelados_prov  = R["cancelados_provided"]
+    with st.spinner("Procesando Miravia..."):
+        mir_bytes = miravia_file.read()
+        mir_sheets = pd.read_excel(io.BytesIO(mir_bytes), sheet_name=None)
+        hoja1_raw = mir_sheets.get("Hoja1", pd.DataFrame())
+        hoja2_raw = mir_sheets.get("Hoja2", pd.DataFrame())
 
+        # Load cancelados if provided
+        df_cancelados = None
+        if cancelados_file:
+            can_bytes = cancelados_file.read()
+            can_sheets = pd.read_excel(io.BytesIO(can_bytes), sheet_name=None)
+            df_cancelados = list(can_sheets.values())[0]
+
+        # Clean Hoja1
+        h1_clean = clean_hoja1(hoja1_raw) if not hoja1_raw.empty else pd.DataFrame()
+
+        # Duplicates Combination
+        dupes_comb, id_map = check_duplicates_miravia(h1_clean) if not h1_clean.empty else (pd.DataFrame(), {})
+
+        # Cross-reference cancelados
+        df_cancel_match = cross_miravia_cancelados(h1_clean, df_cancelados) if df_cancelados is not None else pd.DataFrame()
+
+        # Tarifa analysis (Hoja2 if exists)
+        df_tarifa = pd.DataFrame()
+        multi_count = 0
+        if not hoja2_raw.empty:
+            df_expanded = expand_multi_sku_rows(hoja2_raw)
+            results = []
+            for _, row in df_expanded.iterrows():
+                status, pvp_min, pvp_pub, diff_min, diff_pub, tarifa_sheet = analyze_row(
+                    row, nac_lookup, inter_lookups
+                )
+                results.append({
+                    "Pedido": row.get("Pedido", ""), "SKU Original": row.get("_sku_orig", ""),
+                    "SKU": row.get("Sku", ""), "SKU Norm.": row.get("_sku_norm", ""),
+                    "Multi-SKU": "✔" if row.get("_multi_flag") else "",
+                    "País": row.get("País", ""),
+                    "Precio Pedido (€)": parse_price(row.get("Pedido.1")),
+                    "Hoja Tarifa": tarifa_sheet,
+                    "PVP Mín (€)": pvp_min, "PVP Pub (€)": pvp_pub,
+                    "Dif vs Mín (€)": diff_min, "Estado": status,
+                })
+            df_tarifa = pd.DataFrame(results)
+            multi_count = df_expanded["_multi_flag"].sum()
+
+    # ── Display
     st.markdown("---")
     st.markdown("## 🏪 Pago aceptado Miravia — Resultados")
 
     col1, col2, col3, col4 = st.columns(4)
-    col1.metric("📋 Pedidos Miravia",    len(h1_clean))
-    col2.metric("🔴 Cancelados match",   len(df_cancel_match))
-    col3.metric("⚠️ Dupl. Combination",  len(dupes_comb))
-    col4.metric("💰 Tarifa analizados",  len(df_tarifa))
+    col1.metric("📋 Pedidos Miravia", len(h1_clean))
+    col2.metric("🔴 Cancelados match", len(df_cancel_match))
+    col3.metric("⚠️ Dupl. Combination", len(dupes_comb))
+    col4.metric("💰 Tarifa analizados", len(df_tarifa))
 
     tabs = st.tabs(["🔴 Cancelados", "⚠️ Duplicados Combination", "💰 Análisis Tarifa", "📄 Hoja1 limpia"])
 
     with tabs[0]:
-        if not cancelados_prov:
+        if cancelados_file is None:
             st.info("No se ha subido el fichero ES de cancelados.")
         elif len(df_cancel_match) > 0:
             st.error(f"🔴 **{len(df_cancel_match)}** pedidos Miravia encontrados en el fichero de cancelados")
-            st.dataframe(df_cancel_match, use_container_width=True, hide_index=True)
+            st.caption("Marca cada cancelado como enviado al canal. Los enviados quedan sombreados.")
+
+            if "cancelados_enviados_b" not in st.session_state:
+                st.session_state["cancelados_enviados_b"] = set()
+
+            col_mark, col_clear = st.columns([1, 4])
+            with col_mark:
+                if st.button("✅ Marcar todos como enviados", key="mark_all_b"):
+                    st.session_state["cancelados_enviados_b"] = set(range(len(df_cancel_match)))
+            with col_clear:
+                if st.button("↩ Limpiar marcas", key="clear_b"):
+                    st.session_state["cancelados_enviados_b"] = set()
+
+            for i, (_, row) in enumerate(df_cancel_match.iterrows()):
+                enviado = i in st.session_state["cancelados_enviados_b"]
+                bg = "#f0fdf4" if enviado else "#fff1f2"
+                border = "#86efac" if enviado else "#fca5a5"
+                with st.container():
+                    st.markdown(
+                        f"""<div style="background:{bg};border:1.5px solid {border};border-radius:8px;
+                        padding:10px 16px;margin-bottom:6px;">
+                        <span style="font-size:13px;color:#374151;">
+                        <b>Pedido {row.get('ID Pedido','')}</b> &nbsp;·&nbsp;
+                        Combination: <code>{row.get('Combination','')}</code> &nbsp;·&nbsp;
+                        ID: <code>{row.get('ID Extraído','')}</code> &nbsp;·&nbsp;
+                        SKU: <code>{row.get('SKU','')}</code> &nbsp;·&nbsp;
+                        {row.get('Cliente','')}
+                        </span>
+                        <span style="margin-left:8px;font-weight:600;color:{'#15803d' if enviado else '#9f1239'}">
+                        &nbsp;{'✅ Enviado' if enviado else '⬜ Pendiente'}
+                        </span></div>""",
+                        unsafe_allow_html=True
+                    )
+                    checked = st.checkbox(
+                        "Enviado al canal",
+                        value=enviado,
+                        key=f"cancel_b_{i}",
+                    )
+                    if checked and i not in st.session_state["cancelados_enviados_b"]:
+                        st.session_state["cancelados_enviados_b"].add(i)
+                        st.rerun()
+                    elif not checked and i in st.session_state["cancelados_enviados_b"]:
+                        st.session_state["cancelados_enviados_b"].discard(i)
+                        st.rerun()
         else:
             n_ids = sum(1 for v in id_map.values() if v)
             n_can = len(df_cancelados) if df_cancelados is not None else 0
@@ -752,24 +743,40 @@ else:
         if not df_tarifa.empty:
             if multi_count > 0:
                 st.info(f"🔀 **{multi_count}** líneas generadas por expansión de pedidos multi-SKU")
-            st.dataframe(df_tarifa.style.map(color_status, subset=["Estado"]), use_container_width=True, hide_index=True)
-            email_widget(df_tarifa, "procB")
+
+            def color_status(val):
+                colors = {
+                    "✅ OK": "background-color:#d1fae5;color:#065f46",
+                    "🟡 EN MÍNIMO": "background-color:#fef3c7;color:#92400e",
+                    "🔴 BAJO MÍNIMO": "background-color:#fee2e2;color:#991b1b",
+                    "❌ NO EN TARIFA": "background-color:#fce7f3;color:#831843",
+                    "⚠️ SIN PRECIO": "background-color:#fef3c7;color:#92400e",
+                }
+                return colors.get(val, "")
+
+            styled = df_tarifa.style.map(color_status, subset=["Estado"])
+            st.dataframe(styled, use_container_width=True, hide_index=True)
         else:
             st.info("Sin datos en Hoja2 para análisis de tarifa (habitual en Miravia).")
 
     with tabs[3]:
         st.dataframe(h1_clean, use_container_width=True, hide_index=True)
 
+    # ── Export
     st.markdown("---")
     sections = [
-        ("Cancelados Match",      df_cancel_match if len(df_cancel_match) > 0 else None,
+        ("Cancelados Match", df_cancel_match if len(df_cancel_match) > 0 else None,
          "Sin cancelados encontrados" if len(df_cancel_match) == 0 else None),
         ("Duplicados Combination", dupes_comb if len(dupes_comb) > 0 else None,
          "Sin duplicados en Combination" if len(dupes_comb) == 0 else None),
-        ("Análisis Tarifa",       df_tarifa if not df_tarifa.empty else None, None),
-        ("Hoja1 limpia",          h1_clean, None),
+        ("Análisis Tarifa", df_tarifa if not df_tarifa.empty else None, None),
+        ("Hoja1 limpia", h1_clean, None),
     ]
     excel_bytes = build_excel([(s, d, t) for s, d, t in sections if d is not None or t is not None])
-    st.download_button("⬇️ Descargar Excel completo", data=excel_bytes,
+    st.download_button(
+        "⬇️ Descargar Excel completo",
+        data=excel_bytes,
         file_name=f"PagoAceptadoMiravia_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", type="primary")
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        type="primary",
+    )
