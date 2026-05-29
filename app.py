@@ -478,7 +478,7 @@ with st.sidebar:
         "Fichero remitentes (.xlsx) — Columnas: Canal, Email, Nombre",
         type="xlsx", key="remitentes"
     )
-    with st.expander("⚙️ Config. SMTP (para envío de emails)", expanded=False):
+    with st.expander("⚙️ Config. SMTP", expanded=False):
         smtp_server = st.text_input("Servidor SMTP", value="smtp.gmail.com", key="smtp_srv")
         smtp_port   = st.number_input("Puerto", value=465, key="smtp_port")
         smtp_user   = st.text_input("Usuario (email remitente)", key="smtp_user")
@@ -509,11 +509,12 @@ if not run_btn:
     st.stop()
 
 
-# ── Read SMTP config from session_state (set by sidebar widgets) ──────────────
+# ── SMTP config from sidebar (stored in session_state by widgets) ─────────────
 smtp_server = st.session_state.get("smtp_srv", "smtp.gmail.com")
 smtp_port   = int(st.session_state.get("smtp_port", 465))
 smtp_user   = st.session_state.get("smtp_user", "")
 smtp_pass   = st.session_state.get("smtp_pass", "")
+_smtp_ok    = bool(smtp_user and smtp_pass)
 
 # ── Load remitentes ──────────────────────────────────────────────────────────
 remitentes_df = None
@@ -675,7 +676,7 @@ if not es_miravia:
                 st.rerun()
 
         # Send by channel buttons
-        if smtp_user and smtp_pass:
+        if _smtp_ok:
             st.markdown("**📧 Enviar cancelados por canal:**")
             btn_cols = st.columns(min(len(marketplaces), 4))
             for ci, mkt in enumerate(marketplaces):
@@ -695,7 +696,7 @@ if not es_miravia:
                         except Exception as e:
                             st.error(f"❌ Error: {e}")
         else:
-            st.info("💡 Configura SMTP en el sidebar y sube el fichero de remitentes para enviar emails por canal.")
+            st.info("💡 SMTP no configurado. Añade las credenciales en `.streamlit/secrets.toml` para enviar emails.")
 
         # Per-row cards
         for i, (idx, row) in enumerate(df_cancel_rows.iterrows()):
@@ -864,7 +865,7 @@ else:
                 st.rerun()
 
         # Email send button
-        if smtp_user and smtp_pass:
+        if _smtp_ok:
             email_mir, nombre_mir = get_remitente(remitentes_df, "Miravia") if remitentes_df is not None else (None, None)
             disabled_mir = email_mir is None
             help_mir = f"→ {email_mir}" if email_mir else "Sin email para Miravia en remitentes"
@@ -884,7 +885,7 @@ else:
                 except Exception as e:
                     st.error(f"❌ Error al enviar: {e}")
         else:
-            st.info("💡 Configura SMTP en el sidebar y sube el fichero de remitentes para enviar emails.")
+            st.info("💡 SMTP no configurado. Añade las credenciales en `.streamlit/secrets.toml` para enviar emails.")
 
         # Per-row cards
         for i, (_, row) in enumerate(df_cancel_match.iterrows()):
