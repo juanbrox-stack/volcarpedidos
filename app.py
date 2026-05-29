@@ -509,6 +509,12 @@ if not run_btn:
     st.stop()
 
 
+# ── Read SMTP config from session_state (set by sidebar widgets) ──────────────
+smtp_server = st.session_state.get("smtp_srv", "smtp.gmail.com")
+smtp_port   = int(st.session_state.get("smtp_port", 465))
+smtp_user   = st.session_state.get("smtp_user", "")
+smtp_pass   = st.session_state.get("smtp_pass", "")
+
 # ── Load remitentes ──────────────────────────────────────────────────────────
 remitentes_df = None
 if remitentes_file:
