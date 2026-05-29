@@ -121,9 +121,12 @@ def analyze_row(row, nac_lkp, inter_lkp):
         return "⚠️ SIN PRECIO", pvp_min, pvp_pub, None, None, sh
     d_min = round(price - pvp_min, 2)
     d_pub = round(price - pvp_pub, 2)
-    if price < pvp_min:   status = "🔴 BAJO MÍNIMO"
-    elif price == pvp_min: status = "🟡 EN MÍNIMO"
-    else:                  status = "✅ OK"
+    if price < pvp_min:
+        status = "🔴 BAJO MÍNIMO" if abs(d_min) <= 10 else "🔴 BAJO MÍNIMO (>10€)"
+    elif price == pvp_min:
+        status = "🟡 EN MÍNIMO"
+    else:
+        status = "✅ OK"
     return status, pvp_min, pvp_pub, d_min, d_pub, sh
 
 # ── Hoja1 helpers ─────────────────────────────────────────────────────────────
@@ -256,8 +259,13 @@ def build_excel(sections):
     HDR_FILL = PatternFill("solid", start_color="1B2A4A")
     HDR_FONT = Font(name="Arial", bold=True, color="FFFFFF", size=10)
     STATUS_COLOR = {
-        "✅ OK":"27AE60","🟡 EN MÍNIMO":"F39C12","🔴 BAJO MÍNIMO":"E74C3C",
-        "❌ NO EN TARIFA":"C0392B","⚠️ SIN PRECIO":"F39C12","CANCELAR":"C0392B",
+        "✅ OK":                 "27AE60",
+        "🟡 EN MÍNIMO":          "F39C12",
+        "🔴 BAJO MÍNIMO":        "E74C3C",
+        "🔴 BAJO MÍNIMO (>10€)": "C0392B",
+        "❌ NO EN TARIFA":        "C0392B",
+        "⚠️ SIN PRECIO":         "F39C12",
+        "CANCELAR":              "C0392B",
     }
     first = True
     for sheet_name, df, summary in sections:
@@ -292,18 +300,29 @@ def build_excel(sections):
 
 # ── Color status helper ───────────────────────────────────────────────────────
 def color_status(val):
-    return {
-        "✅ OK":           "background-color:#d1fae5;color:#065f46",
-        "🟡 EN MÍNIMO":    "background-color:#fef3c7;color:#92400e",
-        "🔴 BAJO MÍNIMO":  "background-color:#fee2e2;color:#991b1b",
-        "❌ NO EN TARIFA": "background-color:#fce7f3;color:#831843",
-        "⚠️ SIN PRECIO":   "background-color:#fef3c7;color:#92400e",
-    }.get(val, "")
+    m = {
+        "✅ OK":                   "background-color:#d1fae5;color:#065f46",
+        "🟡 EN MÍNIMO":            "background-color:#fef3c7;color:#92400e",
+        "🔴 BAJO MÍNIMO":          "background-color:#fee2e2;color:#991b1b",
+        "🔴 BAJO MÍNIMO (>10€)":   "background-color:#fecaca;color:#7f1d1d",
+        "❌ NO EN TARIFA":          "background-color:#fce7f3;color:#831843",
+        "⚠️ SIN PRECIO":           "background-color:#fef3c7;color:#92400e",
+    }
+    # Prefix match so both 🔴 variants get styled
+    for k, v in m.items():
+        if val == k: return v
+    return ""
 
 # ── Email widget (cancelados por canal) ───────────────────────────────────────
 def cancelados_widget(df_tarifa, remitentes_df, key_prefix):
     """Renders cancelados tracker + email-by-channel below the tarifa table."""
-    df_c = df_tarifa[df_tarifa["Estado"].str.startswith("❌")].copy() if not df_tarifa.empty else pd.DataFrame()
+    # Include ❌ NO EN TARIFA (must cancel) AND 🔴 BAJO MÍNIMO (user decides)
+    if df_tarifa.empty:
+        df_c = pd.DataFrame()
+    else:
+        mask = (df_tarifa["Estado"].str.startswith("❌") |
+                df_tarifa["Estado"].str.startswith("🔴"))
+        df_c = df_tarifa[mask].copy()
     if df_c.empty: return
 
     smtp_cfg = get_smtp()
@@ -358,13 +377,22 @@ def cancelados_widget(df_tarifa, remitentes_df, key_prefix):
         mkt    = row.get("Marketplace","")
         email, _ = get_email_for(remitentes_df, mkt)
         etag = f' <small style="color:#64748b">→ {email}</small>' if email else ""
+        estado_row = str(row.get("Estado",""))
+        es_cancelar = estado_row.startswith("❌")
+        es_bajo     = estado_row.startswith("🔴")
+        d_min_val   = row.get("Dif vs Mín (€)", None)
+        tipo_label  = "CANCELAR" if es_cancelar else f"REVISAR (dif {d_min_val}€)"
+        tipo_color  = "#7f1d1d" if es_cancelar else "#92400e"
+        tipo_bg     = "#fee2e2" if es_cancelar else "#fff7ed"
         st.markdown(
             f"""<div style="background:{bg};border:1.5px solid {border};border-radius:8px;
             padding:10px 16px;margin-bottom:4px;display:flex;align-items:center;gap:10px;">
             <span style="font-size:13px;color:#374151;">
             <b>Pedido {row.get('Pedido','')}</b> · {mkt}{etag} ·
             {row.get('Id Marketplace','')} ·
-            SKU <code>{row.get('SKU Original', row.get('SKU',''))}</code> · {row.get('País','')}
+            SKU <code>{row.get('SKU Original', row.get('SKU',''))}</code> · {row.get('País','')} ·
+            <span style="background:{tipo_bg};color:{tipo_color};padding:1px 8px;border-radius:4px;
+            font-size:11px;font-weight:700">{tipo_label}</span>
             </span>
             <span style="margin-left:auto;font-weight:600;color:{'#15803d' if sent else '#9f1239'}">
             {'✅ Enviado' if sent else '⬜ Pendiente'}</span></div>""",
