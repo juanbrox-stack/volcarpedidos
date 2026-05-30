@@ -428,7 +428,6 @@ def cancelados_widget(df_tarifa, remitentes_df, key_prefix):
             for i in idx_sel:
                 st.session_state[sk_sent].add(i)
             st.success(f"✅ Email enviado a {email_dest} ({len(df_sel)} pedidos)")
-            st.rerun()
         except Exception as e:
             st.error(f"❌ {e}")
 
@@ -436,7 +435,6 @@ def cancelados_widget(df_tarifa, remitentes_df, key_prefix):
     if st.session_state[sk_sent]:
         if st.button("↩ Limpiar enviados", key=f"{key_prefix}_clear"):
             st.session_state[sk_sent] = set()
-            st.rerun()
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # SIDEBAR
