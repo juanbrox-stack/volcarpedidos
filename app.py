@@ -366,12 +366,8 @@ def cancelados_widget(df_tarifa, remitentes_df, key_prefix):
 
     # ── session_state keys ────────────────────────────────────────────────────
     sk_sent = f"_sent_{key_prefix}"
-    sk_rem  = f"_rem_{key_prefix}"
-    sk_sub  = f"_asunto_{key_prefix}"
     sk_psel = f"_psel_{key_prefix}"
     if sk_sent not in st.session_state: st.session_state[sk_sent] = set()
-    if sk_rem  not in st.session_state: st.session_state[sk_rem]  = 0
-    if sk_sub  not in st.session_state: st.session_state[sk_sub]  = "Cancelados"
 
     # Build pedido labels (with estado color indicator)
     ESTADO_ICON = {"❌": "❌", "🔴": "🔴", "🟡": "🟡"}
@@ -459,55 +455,50 @@ def cancelados_widget(df_tarifa, remitentes_df, key_prefix):
 
     st.markdown("**📧 Enviar pedidos pendientes:**")
 
-    # Destinatario (selectbox — re-renders but stays below table, no jump)
-    rem_idx = st.selectbox(
-        "Destinatario",
-        options=list(range(len(rem_opciones))),
-        format_func=lambda i: rem_opciones[i],
-        index=st.session_state[sk_rem],
-        key=f"{key_prefix}_rem_sel",
-    )
-    st.session_state[sk_rem] = rem_idx
+    # Pedidos multiselect OUTSIDE form — state managed via session_state key
+    # default= only set on first render (key not yet in session_state)
+    if sk_psel not in st.session_state:
+        st.session_state[sk_psel] = [todas_opciones[i] for i in pendientes_idx]
 
-    # Asunto
-    asunto = st.text_input("Asunto", value=st.session_state[sk_sub], key=f"{key_prefix}_asunto")
-    st.session_state[sk_sub] = asunto
-
-    # Pedidos multiselect — all options with estado icon, pre-selected = pending
-    pedidos_sel = st.multiselect(
+    st.multiselect(
         "Pedidos a incluir",
         options=todas_opciones,
-        default=st.session_state[sk_psel],
-        key=f"{key_prefix}_psel",
+        key=sk_psel,
     )
-    st.session_state[sk_psel] = pedidos_sel
+    pedidos_sel = st.session_state[sk_psel]
 
-    # Enviar button
-    col_btn, col_clr = st.columns([2, 3])
-    with col_btn:
-        if st.button(f"📤 Enviar {len(pedidos_sel)} pedido(s)", type="primary",
-                     key=f"{key_prefix}_enviar",
-                     disabled=len(pedidos_sel) == 0 or rem_idx == 0):
-            rem_lbl = rem_opciones[rem_idx]
-            email_dest, nombre_dest = rem_map.get(rem_lbl, (None, None))
-            idx_sel = [i for i, lbl in enumerate(todas_opciones) if lbl in pedidos_sel]
+    # Destinatario + Asunto + Enviar inside st.form → no re-render on interaction
+    with st.form(key=f"{key_prefix}_form"):
+        rem_sel = st.selectbox("Destinatario", rem_opciones)
+        asunto  = st.text_input("Asunto", value="Cancelados")
+        submitted = st.form_submit_button(
+            f"📤 Enviar {len(pedidos_sel)} pedido(s)",
+            type="primary",
+            disabled=len(pedidos_sel) == 0,
+        )
+
+    if submitted:
+        email_dest, _ = rem_map.get(rem_sel, (None, None))
+        if not email_dest:
+            st.warning("⚠️ Elige un destinatario válido")
+        else:
+            idx_sel  = [i for i, lbl in enumerate(todas_opciones) if lbl in pedidos_sel]
             df_envio = df_c.iloc[idx_sel].copy()
             try:
                 send_email(email_dest, asunto, df_envio, smtp_cfg)
                 for i in idx_sel:
                     st.session_state[sk_sent].add(i)
-                # Reset selection to remaining pending
                 remaining = [todas_opciones[i] for i in range(len(df_c))
                              if i not in st.session_state[sk_sent]]
                 st.session_state[sk_psel] = remaining
                 st.success(f"✅ Enviado a {email_dest} ({len(df_envio)} pedidos)")
             except Exception as e:
                 st.error(f"❌ {e}")
-    with col_clr:
-        if st.session_state[sk_sent]:
-            if st.button("↩ Limpiar enviados", key=f"{key_prefix}_clear"):
-                st.session_state[sk_sent] = set()
-                st.session_state[sk_psel] = todas_opciones
+
+    if st.session_state[sk_sent]:
+        if st.button("↩ Limpiar enviados", key=f"{key_prefix}_clear"):
+            st.session_state[sk_sent] = set()
+            st.session_state.pop(sk_psel, None)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # SIDEBAR
