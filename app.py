@@ -366,7 +366,6 @@ def cancelados_widget(df_tarifa, remitentes_df, key_prefix):
 
     # ── session_state keys ────────────────────────────────────────────────────
     sk_sent = f"_sent_{key_prefix}"
-    sk_psel = f"_psel_{key_prefix}"
     if sk_sent not in st.session_state: st.session_state[sk_sent] = set()
 
     # Build pedido labels (with estado color indicator)
@@ -448,39 +447,29 @@ def cancelados_widget(df_tarifa, remitentes_df, key_prefix):
         f'</tr></thead><tbody>{rows_html}</tbody></table>',
         unsafe_allow_html=True)
 
-    # ── 2. Envío ──────────────────────────────────────────────────────────────
+    # ── 2. Envío — todo dentro de st.form ────────────────────────────────────
     if not smtp_cfg:
         st.caption("⚠️ SMTP no configurado en Secrets")
         return
 
     st.markdown("**📧 Enviar pedidos pendientes:**")
 
-    # Pedidos multiselect OUTSIDE form — state managed via session_state key
-    # default= only set on first render (key not yet in session_state)
-    if sk_psel not in st.session_state:
-        st.session_state[sk_psel] = [todas_opciones[i] for i in pendientes_idx]
-
-    st.multiselect(
-        "Pedidos a incluir",
-        options=todas_opciones,
-        key=sk_psel,
-    )
-    pedidos_sel = st.session_state[sk_psel]
-
-    # Destinatario + Asunto + Enviar inside st.form → no re-render on interaction
-    with st.form(key=f"{key_prefix}_form"):
+    with st.form(key=f"{key_prefix}_form", clear_on_submit=False):
         rem_sel = st.selectbox("Destinatario", rem_opciones)
         asunto  = st.text_input("Asunto", value="Cancelados")
-        submitted = st.form_submit_button(
-            f"📤 Enviar {len(pedidos_sel)} pedido(s)",
-            type="primary",
-            disabled=len(pedidos_sel) == 0,
+        pedidos_sel = st.multiselect(
+            "Pedidos a incluir",
+            options=todas_opciones,
+            default=todas_opciones,
         )
+        submitted = st.form_submit_button("📤 Enviar email", type="primary")
 
     if submitted:
         email_dest, _ = rem_map.get(rem_sel, (None, None))
         if not email_dest:
             st.warning("⚠️ Elige un destinatario válido")
+        elif not pedidos_sel:
+            st.warning("⚠️ Selecciona al menos un pedido")
         else:
             idx_sel  = [i for i, lbl in enumerate(todas_opciones) if lbl in pedidos_sel]
             df_envio = df_c.iloc[idx_sel].copy()
@@ -488,9 +477,6 @@ def cancelados_widget(df_tarifa, remitentes_df, key_prefix):
                 send_email(email_dest, asunto, df_envio, smtp_cfg)
                 for i in idx_sel:
                     st.session_state[sk_sent].add(i)
-                remaining = [todas_opciones[i] for i in range(len(df_c))
-                             if i not in st.session_state[sk_sent]]
-                st.session_state[sk_psel] = remaining
                 st.success(f"✅ Enviado a {email_dest} ({len(df_envio)} pedidos)")
             except Exception as e:
                 st.error(f"❌ {e}")
@@ -498,7 +484,6 @@ def cancelados_widget(df_tarifa, remitentes_df, key_prefix):
     if st.session_state[sk_sent]:
         if st.button("↩ Limpiar enviados", key=f"{key_prefix}_clear"):
             st.session_state[sk_sent] = set()
-            st.session_state.pop(sk_psel, None)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # SIDEBAR
