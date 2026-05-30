@@ -434,23 +434,17 @@ def cancelados_widget(df_tarifa, remitentes_df, key_prefix):
     else:
         st.markdown("**📧 Enviar pedidos pendientes:**")
 
-        # ── Canal filter OUTSIDE form (avoids re-render jump) ─────────────────
-        sk_mkts = f"{key_prefix}_mkts"
-        if sk_mkts not in st.session_state:
-            st.session_state[sk_mkts] = mkts_disponibles
-        # Keep only valid options (in case df_pend changed)
-        st.session_state[sk_mkts] = [m for m in st.session_state[sk_mkts] if m in mkts_disponibles]
-        if not st.session_state[sk_mkts]:
+        # ── Canal filter OUTSIDE form ─────────────────────────────────────────
+        # Use key= only (no default=) — session_state initialized once with all channels
+        sk_mkts = f"{key_prefix}_mkts_widget"
+        if sk_mkts not in st.session_state or not st.session_state[sk_mkts]:
             st.session_state[sk_mkts] = mkts_disponibles
 
         mkts_sel = st.multiselect(
             "Canales a incluir en este email",
             options=mkts_disponibles,
-            default=st.session_state[sk_mkts],
-            key=f"{key_prefix}_mkts_widget",
+            key=sk_mkts,
         )
-        # Sync back to session_state without rerun
-        st.session_state[sk_mkts] = mkts_sel
 
         df_envio = df_pend[df_pend["Marketplace"].isin(mkts_sel)] if mkts_sel else pd.DataFrame()
 
