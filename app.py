@@ -385,10 +385,7 @@ def cancelados_widget(df_tarifa, remitentes_df, key_prefix):
 
     todas_opciones = [pedido_label(row) for _, row in df_c.iterrows()]
 
-    # Init pedidos selection (all pending)
     pendientes_idx = [i for i in range(len(df_c)) if i not in st.session_state[sk_sent]]
-    if sk_psel not in st.session_state:
-        st.session_state[sk_psel] = [todas_opciones[i] for i in pendientes_idx]
 
     # Build remitente options — sorted alphabetically
     rem_opciones = ["— elige remitente —"]
