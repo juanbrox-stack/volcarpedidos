@@ -451,9 +451,17 @@ def cancelados_widget(df_tarifa, remitentes_df, key_prefix):
 
     st.markdown("**📧 Enviar pedidos pendientes:**")
 
+    # Show pending result from previous submit (persisted across re-runs)
+    sk_msg = f"_msg_{key_prefix}"
+    if sk_msg in st.session_state:
+        msg_type, msg_text = st.session_state.pop(sk_msg)
+        if msg_type == "ok":    st.success(msg_text)
+        elif msg_type == "warn": st.warning(msg_text)
+        else:                    st.error(msg_text)
+
     with st.form(key=f"{key_prefix}_form", clear_on_submit=False):
-        rem_sel = st.selectbox("Destinatario", rem_opciones)
-        asunto  = st.text_input("Asunto", value="Cancelados")
+        rem_sel     = st.selectbox("Destinatario", rem_opciones)
+        asunto      = st.text_input("Asunto", value="Cancelados")
         pedidos_sel = st.multiselect(
             "Pedidos a incluir",
             options=todas_opciones,
@@ -464,9 +472,9 @@ def cancelados_widget(df_tarifa, remitentes_df, key_prefix):
     if submitted:
         email_dest, _ = rem_map.get(rem_sel, (None, None))
         if not email_dest:
-            st.warning("⚠️ Elige un destinatario válido")
+            st.session_state[sk_msg] = ("warn", "⚠️ Elige un destinatario válido")
         elif not pedidos_sel:
-            st.warning("⚠️ Selecciona al menos un pedido")
+            st.session_state[sk_msg] = ("warn", "⚠️ Selecciona al menos un pedido")
         else:
             idx_sel  = [i for i, lbl in enumerate(todas_opciones) if lbl in pedidos_sel]
             df_envio = df_c.iloc[idx_sel].copy()
@@ -474,9 +482,10 @@ def cancelados_widget(df_tarifa, remitentes_df, key_prefix):
                 send_email(email_dest, asunto, df_envio, smtp_cfg)
                 for i in idx_sel:
                     st.session_state[sk_sent].add(i)
-                st.success(f"✅ Enviado a {email_dest} ({len(df_envio)} pedidos)")
+                st.session_state[sk_msg] = ("ok", f"✅ Enviado a {email_dest} ({len(df_envio)} pedidos)")
             except Exception as e:
-                st.error(f"❌ {e}")
+                st.session_state[sk_msg] = ("err", f"❌ {e}")
+        st.rerun()
 
     if st.session_state[sk_sent]:
         if st.button("↩ Limpiar enviados", key=f"{key_prefix}_clear"):
@@ -532,7 +541,11 @@ if remitentes_file:
     except Exception as e:
         st.sidebar.warning(f"⚠️ Remitentes: {e}")
 
-if not run_btn:
+# Persist run state so form submits (re-runs) don't lose context
+if run_btn:
+    st.session_state["_ran"] = True
+
+if not run_btn and not st.session_state.get("_ran"):
     smtp_ok = get_smtp() is not None
     st.info("👈 Selecciona el proceso, sube los ficheros y pulsa **Procesar**.")
     st.markdown(f"""
