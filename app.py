@@ -315,7 +315,7 @@ def color_status(val):
 
 # ── Email widget (cancelados por canal) ───────────────────────────────────────
 def cancelados_widget(df_tarifa, remitentes_df, key_prefix):
-    """Gestión manual de cancelados: selección de pedidos + remitente + envío."""
+    """Gestión de cancelados: tabla sombreada + st.form para envío sin re-renders."""
     if df_tarifa.empty:
         return
     mask = (df_tarifa["Estado"].str.startswith("❌") |
@@ -325,103 +325,127 @@ def cancelados_widget(df_tarifa, remitentes_df, key_prefix):
         return
 
     smtp_cfg = get_smtp()
-    sk_sent  = f"_sent_{key_prefix}"   # set of integer positions (0..n-1) marked as sent
+    sk_sent  = f"_sent_{key_prefix}"
     if sk_sent not in st.session_state:
         st.session_state[sk_sent] = set()
 
     st.markdown("---")
     st.markdown("### 📋 Gestión de cancelados")
 
-    # ── 1. Tabla de cancelados con sombreado de enviados ─────────────────────
+    # ── 1. Tabla con sombreado de enviados ────────────────────────────────────
     rows_html = ""
     for i, (_, row) in enumerate(df_c.iterrows()):
         sent   = i in st.session_state[sk_sent]
-        bg     = "#f0fdf4" if sent else ("#fff7ed" if row.get("Estado","").startswith("🔴") else "#fff1f2")
-        estado = row.get("Estado","")
+        estado = str(row.get("Estado",""))
         d_min  = row.get("Dif vs Mín (€)","")
-        badge_color = "#15803d" if sent else ("#92400e" if "🔴" in estado else "#831843")
-        badge_text  = "✅ Enviado" if sent else ("REVISAR" if "🔴" in estado else "CANCELAR")
-        rows_html += f"""
-        <tr style="background:{bg}">
-          <td style="padding:7px 12px;border-bottom:1px solid #e2e8f0;font-weight:600">{row.get('Pedido','')}</td>
-          <td style="padding:7px 12px;border-bottom:1px solid #e2e8f0">{row.get('Marketplace','')}</td>
-          <td style="padding:7px 12px;border-bottom:1px solid #e2e8f0">{row.get('Id Marketplace','')}</td>
-          <td style="padding:7px 12px;border-bottom:1px solid #e2e8f0"><code>{row.get('SKU Original', row.get('SKU',''))}</code></td>
-          <td style="padding:7px 12px;border-bottom:1px solid #e2e8f0">{row.get('País','')}</td>
-          <td style="padding:7px 12px;border-bottom:1px solid #e2e8f0">{d_min}</td>
-          <td style="padding:7px 12px;border-bottom:1px solid #e2e8f0">
-            <span style="background:{badge_color};color:#fff;padding:2px 10px;border-radius:10px;
-            font-size:11px;font-weight:700">{badge_text}</span>
-          </td>
-        </tr>"""
+        bg           = "#f0fdf4" if sent else ("#fff7ed" if "🔴" in estado else "#fff1f2")
+        badge_color  = "#15803d" if sent else ("#92400e" if "🔴" in estado else "#831843")
+        badge_text   = "✅ Enviado" if sent else ("REVISAR" if "🔴" in estado else "CANCELAR")
+        rows_html += (
+            f'<tr style="background:{bg}">'
+            f'<td style="padding:7px 12px;border-bottom:1px solid #e2e8f0;font-weight:600">{row.get("Pedido","")}</td>'
+            f'<td style="padding:7px 12px;border-bottom:1px solid #e2e8f0">{row.get("Marketplace","")}</td>'
+            f'<td style="padding:7px 12px;border-bottom:1px solid #e2e8f0">{row.get("Id Marketplace","")}</td>'
+            f'<td style="padding:7px 12px;border-bottom:1px solid #e2e8f0"><code>{row.get("SKU Original", row.get("SKU",""))}</code></td>'
+            f'<td style="padding:7px 12px;border-bottom:1px solid #e2e8f0">{row.get("País","")}</td>'
+            f'<td style="padding:7px 12px;border-bottom:1px solid #e2e8f0">{d_min}</td>'
+            f'<td style="padding:7px 12px;border-bottom:1px solid #e2e8f0">'
+            f'<span style="background:{badge_color};color:#fff;padding:2px 10px;border-radius:10px;'
+            f'font-size:11px;font-weight:700">{badge_text}</span></td></tr>'
+        )
 
-    st.markdown(f"""
-    <table style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:16px">
-      <thead><tr style="background:#1B2A4A;color:#fff">
-        <th style="padding:8px 12px;text-align:left">Pedido</th>
-        <th style="padding:8px 12px;text-align:left">Marketplace</th>
-        <th style="padding:8px 12px;text-align:left">ID Marketplace</th>
-        <th style="padding:8px 12px;text-align:left">SKU</th>
-        <th style="padding:8px 12px;text-align:left">País</th>
-        <th style="padding:8px 12px;text-align:left">Dif Mín (€)</th>
-        <th style="padding:8px 12px;text-align:left">Estado</th>
-      </tr></thead>
-      <tbody>{rows_html}</tbody>
-    </table>""", unsafe_allow_html=True)
+    st.markdown(
+        f'<table style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:16px">'
+        f'<thead><tr style="background:#1B2A4A;color:#fff">'
+        f'<th style="padding:8px 12px;text-align:left">Pedido</th>'
+        f'<th style="padding:8px 12px;text-align:left">Marketplace</th>'
+        f'<th style="padding:8px 12px;text-align:left">ID Marketplace</th>'
+        f'<th style="padding:8px 12px;text-align:left">SKU</th>'
+        f'<th style="padding:8px 12px;text-align:left">País</th>'
+        f'<th style="padding:8px 12px;text-align:left">Dif Mín (€)</th>'
+        f'<th style="padding:8px 12px;text-align:left">Estado</th>'
+        f'</tr></thead><tbody>{rows_html}</tbody></table>',
+        unsafe_allow_html=True)
 
-    # ── 2. Formulario de envío manual ────────────────────────────────────────
-    st.markdown("**📧 Enviar pedidos al canal:**")
-
-    # Build remitente options
+    # ── 2. Envío con st.form (no dispara re-render hasta Submit) ─────────────
+    # Build remitente options once
     rem_opciones = ["— elige remitente —"]
-    rem_map = {}
+    rem_map: dict = {}
     if remitentes_df is not None:
-        email_col  = next((c for c in remitentes_df.columns if "mail"  in c.lower()), None)
-        canal_col  = next((c for c in remitentes_df.columns if "canal" in c.lower()), None)
-        nombre_col = next((c for c in remitentes_df.columns if "nombre" in c.lower()), None)
-        if email_col and canal_col:
+        ec = next((c for c in remitentes_df.columns if "mail"  in c.lower()), None)
+        cc = next((c for c in remitentes_df.columns if "canal" in c.lower()), None)
+        nc = next((c for c in remitentes_df.columns if "nombre" in c.lower()), None)
+        if ec and cc:
             for _, r in remitentes_df.iterrows():
-                label = f"{r[canal_col]} — {r[email_col]}"
-                rem_opciones.append(label)
-                rem_map[label] = (str(r[email_col]).strip(),
-                                  str(r[nombre_col]).strip() if nombre_col else str(r[canal_col]))
+                lbl = f"{r[cc]} — {r[ec]}"
+                rem_opciones.append(lbl)
+                rem_map[lbl] = (str(r[ec]).strip(), str(r[nc]).strip() if nc else str(r[cc]))
 
-    col_rem, col_asunto = st.columns([2, 3])
-    with col_rem:
-        rem_sel = st.selectbox("Destinatario", rem_opciones, key=f"{key_prefix}_rem")
-    with col_asunto:
-        asunto = st.text_input("Asunto", value="Cancelados", key=f"{key_prefix}_asunto")
-
-    email_dest, nombre_dest = rem_map.get(rem_sel, (None, None))
-
-    # Botón enviar — envía TODOS los no enviados aún
     pendientes_idx = [i for i in range(len(df_c)) if i not in st.session_state[sk_sent]]
     df_pend = df_c.iloc[pendientes_idx].copy() if pendientes_idx else pd.DataFrame()
-    can_send = smtp_cfg and email_dest and not df_pend.empty
 
-    hint = ""
-    if not smtp_cfg:          hint = "⚠️ SMTP no configurado en Secrets"
-    elif not email_dest:      hint = "⚠️ Elige un destinatario"
-    elif df_pend.empty:       hint = "✅ Todos los pedidos ya marcados como enviados"
+    if not smtp_cfg:
+        st.caption("⚠️ SMTP no configurado en Secrets — no se pueden enviar emails")
+    else:
+        st.markdown("**📧 Enviar pedidos pendientes:**")
+        # All unique marketplaces among pending rows
+        mkts_disponibles = sorted(df_pend["Marketplace"].unique().tolist()) if not df_pend.empty else []
 
-    if hint:
-        st.caption(hint)
+        with st.form(key=f"{key_prefix}_form"):
+            col_rem, col_asunto = st.columns([2, 3])
+            with col_rem:
+                rem_sel = st.selectbox("Destinatario", rem_opciones)
+            with col_asunto:
+                asunto = st.text_input("Asunto", value="Cancelados")
 
-    col_send, col_clear = st.columns([2, 3])
-    with col_send:
-        if st.button(f"📤 Enviar {len(df_pend)} pedido(s) pendientes", type="primary",
-                     disabled=not can_send, key=f"{key_prefix}_enviar"):
-            try:
-                send_email(email_dest, asunto, df_pend, smtp_cfg)
-                for i in pendientes_idx:
-                    st.session_state[sk_sent].add(i)
-                st.success(f"✅ Enviado a {email_dest} ({len(df_pend)} pedidos)")
-            except Exception as e:
-                st.error(f"❌ {e}")
-    with col_clear:
-        if st.session_state[sk_sent]:
-            if st.button("↩ Limpiar enviados", key=f"{key_prefix}_clear"):
-                st.session_state[sk_sent] = set()
+            # Canal filter — inside form so no intermediate re-renders
+            if mkts_disponibles:
+                mkts_sel = st.multiselect(
+                    "Canales a incluir en este email",
+                    options=mkts_disponibles,
+                    default=mkts_disponibles,
+                    help="Selecciona uno o varios canales. Útil cuando un remitente gestiona varios marketplaces.",
+                )
+            else:
+                mkts_sel = []
+
+            # Compute how many rows will be sent
+            if mkts_sel:
+                df_envio = df_pend[df_pend["Marketplace"].isin(mkts_sel)]
+            else:
+                df_envio = df_pend
+
+            submitted = st.form_submit_button(
+                f"📤 Enviar {len(df_envio)} pedido(s)",
+                type="primary",
+                disabled=df_pend.empty,
+            )
+
+        if submitted:
+            email_dest, nombre_dest = rem_map.get(rem_sel, (None, None))
+            if not email_dest:
+                st.warning("⚠️ Elige un destinatario válido")
+            elif not mkts_sel:
+                st.warning("⚠️ Selecciona al menos un canal")
+            elif df_envio.empty:
+                st.warning("⚠️ No hay pedidos pendientes para los canales seleccionados")
+            else:
+                try:
+                    send_email(email_dest, asunto, df_envio, smtp_cfg)
+                    # Mark as sent the rows that were actually sent
+                    sent_positions = [
+                        i for i in pendientes_idx
+                        if df_c.iloc[i]["Marketplace"] in mkts_sel
+                    ]
+                    for i in sent_positions:
+                        st.session_state[sk_sent].add(i)
+                    st.success(f"✅ Enviado a {email_dest} ({len(df_envio)} pedidos de: {', '.join(mkts_sel)})")
+                except Exception as e:
+                    st.error(f"❌ {e}")
+
+    if st.session_state[sk_sent]:
+        if st.button("↩ Limpiar enviados", key=f"{key_prefix}_clear"):
+            st.session_state[sk_sent] = set()
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # SIDEBAR
