@@ -425,55 +425,48 @@ def cancelados_widget(df_tarifa, remitentes_df, key_prefix):
 
     pendientes_idx = [i for i in range(len(df_c)) if i not in st.session_state[sk_sent]]
     df_pend = df_c.iloc[pendientes_idx].copy() if pendientes_idx else pd.DataFrame()
-    mkts_disponibles = sorted(df_pend["Marketplace"].unique().tolist()) if not df_pend.empty else []
-
     if not smtp_cfg:
         st.caption("⚠️ SMTP no configurado en Secrets — no se pueden enviar emails")
     elif df_pend.empty:
         st.success("✅ Todos los pedidos ya enviados")
     else:
         st.markdown("**📧 Enviar pedidos pendientes:**")
-
-        # ── Canal filter OUTSIDE form ─────────────────────────────────────────
-        # Use key= only (no default=) — session_state initialized once with all channels
-        sk_mkts = f"{key_prefix}_mkts_widget"
-        if sk_mkts not in st.session_state or not st.session_state[sk_mkts]:
-            st.session_state[sk_mkts] = mkts_disponibles
-
-        mkts_sel = st.multiselect(
-            "Canales a incluir en este email",
-            options=mkts_disponibles,
-            key=sk_mkts,
-        )
-
-        df_envio = df_pend[df_pend["Marketplace"].isin(mkts_sel)] if mkts_sel else pd.DataFrame()
-
-        # ── Destinatario + Asunto + Enviar inside form ────────────────────────
+        # ── Todo dentro de st.form: ningún widget dispara re-render hasta Submit
         with st.form(key=f"{key_prefix}_form"):
-            col_rem, col_asunto = st.columns([2, 3])
-            with col_rem:
-                rem_sel = st.selectbox("Destinatario", rem_opciones)
-            with col_asunto:
-                asunto = st.text_input("Asunto", value="Cancelados")
+            # Destinatario
+            rem_sel = st.selectbox("Destinatario", rem_opciones)
+            # Pedidos a incluir — multiselect DENTRO del form para que no salte
+            opciones_pedidos = [
+                f"{row.get('Pedido','')} · {row.get('Marketplace','')} · "
+                f"{row.get('Id Marketplace','')} · SKU {row.get('SKU Original', row.get('SKU',''))} · {row.get('País','')}"
+                for _, row in df_pend.iterrows()
+            ]
+            pedidos_sel = st.multiselect(
+                "Pedidos a incluir en este email",
+                options=opciones_pedidos,
+                default=opciones_pedidos,
+            )
+            asunto = st.text_input("Asunto", value="Cancelados")
             submitted = st.form_submit_button(
-                f"📤 Enviar {len(df_envio)} pedido(s)",
+                "📤 Enviar email",
                 type="primary",
-                disabled=df_envio.empty,
             )
 
         if submitted:
             email_dest, nombre_dest = rem_map.get(rem_sel, (None, None))
             if not email_dest:
                 st.warning("⚠️ Elige un destinatario válido")
-            elif df_envio.empty:
-                st.warning("⚠️ Selecciona al menos un canal con pedidos pendientes")
+            elif not pedidos_sel:
+                st.warning("⚠️ Selecciona al menos un pedido")
             else:
+                # Map selected labels back to rows
+                idx_sel = [i for i, lbl in enumerate(opciones_pedidos) if lbl in pedidos_sel]
+                df_envio = df_pend.iloc[idx_sel].copy()
                 try:
                     send_email(email_dest, asunto, df_envio, smtp_cfg)
-                    sent_pos = [i for i in pendientes_idx if df_c.iloc[i]["Marketplace"] in mkts_sel]
-                    for i in sent_pos:
+                    for i in [pendientes_idx[j] for j in idx_sel]:
                         st.session_state[sk_sent].add(i)
-                    st.success(f"✅ Enviado a {email_dest} ({len(df_envio)} pedidos — {', '.join(mkts_sel)})")
+                    st.success(f"✅ Enviado a {email_dest} ({len(df_envio)} pedidos)")
                 except Exception as e:
                     st.error(f"❌ {e}")
 
