@@ -353,7 +353,7 @@ def color_status(val):
 
 # ── Email widget (cancelados por canal) ───────────────────────────────────────
 def cancelados_widget(df_tarifa, remitentes_df, key_prefix):
-    """Gestión de cancelados: tabla sombreada + st.form para envío sin re-renders."""
+    """Gestión de cancelados sin re-renders: session_state para toda la selección."""
     if df_tarifa.empty:
         return
     mask = (df_tarifa["Estado"].str.startswith("❌") |
@@ -363,49 +363,38 @@ def cancelados_widget(df_tarifa, remitentes_df, key_prefix):
         return
 
     smtp_cfg = get_smtp()
-    sk_sent  = f"_sent_{key_prefix}"
-    if sk_sent not in st.session_state:
-        st.session_state[sk_sent] = set()
 
-    st.markdown("---")
-    st.markdown("### 📋 Gestión de cancelados")
+    # ── session_state keys ────────────────────────────────────────────────────
+    sk_sent = f"_sent_{key_prefix}"
+    sk_rem  = f"_rem_{key_prefix}"
+    sk_sub  = f"_asunto_{key_prefix}"
+    sk_psel = f"_psel_{key_prefix}"
+    if sk_sent not in st.session_state: st.session_state[sk_sent] = set()
+    if sk_rem  not in st.session_state: st.session_state[sk_rem]  = 0
+    if sk_sub  not in st.session_state: st.session_state[sk_sub]  = "Cancelados"
 
-    # ── 1. Tabla con sombreado de enviados ────────────────────────────────────
-    rows_html = ""
-    for i, (_, row) in enumerate(df_c.iterrows()):
-        sent   = i in st.session_state[sk_sent]
+    # Build pedido labels (with estado color indicator)
+    ESTADO_ICON = {"❌": "❌", "🔴": "🔴", "🟡": "🟡"}
+    def pedido_label(row):
         estado = str(row.get("Estado",""))
-        d_min  = row.get("Dif vs Mín (€)","")
-        bg           = "#f0fdf4" if sent else ("#fff7ed" if "🔴" in estado else "#fff1f2")
-        badge_color  = "#15803d" if sent else ("#92400e" if "🔴" in estado else "#831843")
-        badge_text   = "✅ Enviado" if sent else ("REVISAR" if "🔴" in estado else "CANCELAR")
-        rows_html += (
-            f'<tr style="background:{bg}">'
-            f'<td style="padding:7px 12px;border-bottom:1px solid #e2e8f0;font-weight:600">{row.get("Pedido","")}</td>'
-            f'<td style="padding:7px 12px;border-bottom:1px solid #e2e8f0">{row.get("Marketplace","")}</td>'
-            f'<td style="padding:7px 12px;border-bottom:1px solid #e2e8f0">{row.get("Id Marketplace","")}</td>'
-            f'<td style="padding:7px 12px;border-bottom:1px solid #e2e8f0"><code>{row.get("SKU Original", row.get("SKU",""))}</code></td>'
-            f'<td style="padding:7px 12px;border-bottom:1px solid #e2e8f0">{row.get("País","")}</td>'
-            f'<td style="padding:7px 12px;border-bottom:1px solid #e2e8f0">{d_min}</td>'
-            f'<td style="padding:7px 12px;border-bottom:1px solid #e2e8f0">'
-            f'<span style="background:{badge_color};color:#fff;padding:2px 10px;border-radius:10px;'
-            f'font-size:11px;font-weight:700">{badge_text}</span></td></tr>'
+        icon = next((v for k,v in ESTADO_ICON.items() if estado.startswith(k)), "")
+        d = row.get("Dif vs Mín (€)","")
+        dif = f" ({d}€)" if d != "" and d is not None and str(d) not in ("","nan") else ""
+        return (
+            f"{icon} {row.get('Pedido','')} · "
+            f"{row.get('Marketplace','')} · "
+            f"{row.get('Id Marketplace','')} · "
+            f"SKU {row.get('SKU Original', row.get('SKU',''))} · "
+            f"{row.get('País','')}{dif}"
         )
 
-    st.markdown(
-        f'<table style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:16px">'
-        f'<thead><tr style="background:#1B2A4A;color:#fff">'
-        f'<th style="padding:8px 12px;text-align:left">Pedido</th>'
-        f'<th style="padding:8px 12px;text-align:left">Marketplace</th>'
-        f'<th style="padding:8px 12px;text-align:left">ID Marketplace</th>'
-        f'<th style="padding:8px 12px;text-align:left">SKU</th>'
-        f'<th style="padding:8px 12px;text-align:left">País</th>'
-        f'<th style="padding:8px 12px;text-align:left">Dif Mín (€)</th>'
-        f'<th style="padding:8px 12px;text-align:left">Estado</th>'
-        f'</tr></thead><tbody>{rows_html}</tbody></table>',
-        unsafe_allow_html=True)
+    todas_opciones = [pedido_label(row) for _, row in df_c.iterrows()]
 
-    # ── 2. Envío ──────────────────────────────────────────────────────────────
+    # Init pedidos selection (all pending)
+    pendientes_idx = [i for i in range(len(df_c)) if i not in st.session_state[sk_sent]]
+    if sk_psel not in st.session_state:
+        st.session_state[sk_psel] = [todas_opciones[i] for i in pendientes_idx]
+
     # Build remitente options — sorted alphabetically
     rem_opciones = ["— elige remitente —"]
     rem_map: dict = {}
@@ -414,65 +403,111 @@ def cancelados_widget(df_tarifa, remitentes_df, key_prefix):
         cc = next((c for c in remitentes_df.columns if "canal" in c.lower()), None)
         nc = next((c for c in remitentes_df.columns if "nombre" in c.lower()), None)
         if ec and cc:
-            entries = []
-            for _, r in remitentes_df.iterrows():
-                lbl = f"{r[cc]} — {r[ec]}"
-                entries.append((lbl, (str(r[ec]).strip(), str(r[nc]).strip() if nc else str(r[cc]))))
-            entries.sort(key=lambda x: x[0].lower())
+            entries = sorted([
+                (f"{r[cc]} — {r[ec]}", (str(r[ec]).strip(), str(r[nc]).strip() if nc else str(r[cc])))
+                for _, r in remitentes_df.iterrows()
+            ], key=lambda x: x[0].lower())
             for lbl, val in entries:
                 rem_opciones.append(lbl)
                 rem_map[lbl] = val
 
-    pendientes_idx = [i for i in range(len(df_c)) if i not in st.session_state[sk_sent]]
-    df_pend = df_c.iloc[pendientes_idx].copy() if pendientes_idx else pd.DataFrame()
+    st.markdown("---")
+    st.markdown("### 📋 Gestión de cancelados")
+
+    # ── 1. Tabla sombreada ────────────────────────────────────────────────────
+    rows_html = ""
+    for i, (_, row) in enumerate(df_c.iterrows()):
+        sent   = i in st.session_state[sk_sent]
+        estado = str(row.get("Estado",""))
+        d_min  = row.get("Dif vs Mín (€)","")
+        bg          = "#f0fdf4" if sent else ("#fff7ed" if "🔴" in estado else "#fff1f2")
+        badge_bg    = "#15803d" if sent else ("#92400e" if "🔴" in estado else "#831843")
+        badge_txt   = "✅ Enviado" if sent else ("REVISAR" if "🔴" in estado else "CANCELAR")
+        estado_bg   = "#fecaca" if "❌" in estado else ("#fed7aa" if "🔴" in estado else "#fef9c3")
+        estado_col  = "#7f1d1d" if "❌" in estado else ("#92400e" if "🔴" in estado else "#713f12")
+        rows_html += (
+            f'<tr style="background:{bg}">'
+            f'<td style="padding:7px 12px;border-bottom:1px solid #e2e8f0;font-weight:600">{row.get("Pedido","")}</td>'
+            f'<td style="padding:7px 12px;border-bottom:1px solid #e2e8f0">{row.get("Marketplace","")}</td>'
+            f'<td style="padding:7px 12px;border-bottom:1px solid #e2e8f0">'
+            f'<span style="background:{estado_bg};color:{estado_col};padding:2px 8px;border-radius:8px;font-size:11px;font-weight:700">{estado}</span></td>'
+            f'<td style="padding:7px 12px;border-bottom:1px solid #e2e8f0">{row.get("Id Marketplace","")}</td>'
+            f'<td style="padding:7px 12px;border-bottom:1px solid #e2e8f0"><code>{row.get("SKU Original", row.get("SKU",""))}</code></td>'
+            f'<td style="padding:7px 12px;border-bottom:1px solid #e2e8f0">{row.get("País","")}</td>'
+            f'<td style="padding:7px 12px;border-bottom:1px solid #e2e8f0">{d_min}</td>'
+            f'<td style="padding:7px 12px;border-bottom:1px solid #e2e8f0">'
+            f'<span style="background:{badge_bg};color:#fff;padding:2px 10px;border-radius:10px;font-size:11px;font-weight:700">{badge_txt}</span></td></tr>'
+        )
+    st.markdown(
+        f'<table style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:16px">'
+        f'<thead><tr style="background:#1B2A4A;color:#fff">'
+        f'<th style="padding:8px 12px;text-align:left">Pedido</th>'
+        f'<th style="padding:8px 12px;text-align:left">Marketplace</th>'
+        f'<th style="padding:8px 12px;text-align:left">Estado</th>'
+        f'<th style="padding:8px 12px;text-align:left">ID Marketplace</th>'
+        f'<th style="padding:8px 12px;text-align:left">SKU</th>'
+        f'<th style="padding:8px 12px;text-align:left">País</th>'
+        f'<th style="padding:8px 12px;text-align:left">Dif Mín (€)</th>'
+        f'<th style="padding:8px 12px;text-align:left">Enviado</th>'
+        f'</tr></thead><tbody>{rows_html}</tbody></table>',
+        unsafe_allow_html=True)
+
+    # ── 2. Envío ──────────────────────────────────────────────────────────────
     if not smtp_cfg:
-        st.caption("⚠️ SMTP no configurado en Secrets — no se pueden enviar emails")
-    elif df_pend.empty:
-        st.success("✅ Todos los pedidos ya enviados")
-    else:
-        st.markdown("**📧 Enviar pedidos pendientes:**")
-        # ── Todo dentro de st.form: ningún widget dispara re-render hasta Submit
-        with st.form(key=f"{key_prefix}_form"):
-            # Destinatario
-            rem_sel = st.selectbox("Destinatario", rem_opciones)
-            # Pedidos a incluir — multiselect DENTRO del form para que no salte
-            opciones_pedidos = [
-                f"{row.get('Pedido','')} · {row.get('Marketplace','')} · "
-                f"{row.get('Id Marketplace','')} · SKU {row.get('SKU Original', row.get('SKU',''))} · {row.get('País','')}"
-                for _, row in df_pend.iterrows()
-            ]
-            pedidos_sel = st.multiselect(
-                "Pedidos a incluir en este email",
-                options=opciones_pedidos,
-                default=opciones_pedidos,
-            )
-            asunto = st.text_input("Asunto", value="Cancelados")
-            submitted = st.form_submit_button(
-                "📤 Enviar email",
-                type="primary",
-            )
+        st.caption("⚠️ SMTP no configurado en Secrets")
+        return
 
-        if submitted:
-            email_dest, nombre_dest = rem_map.get(rem_sel, (None, None))
-            if not email_dest:
-                st.warning("⚠️ Elige un destinatario válido")
-            elif not pedidos_sel:
-                st.warning("⚠️ Selecciona al menos un pedido")
-            else:
-                # Map selected labels back to rows
-                idx_sel = [i for i, lbl in enumerate(opciones_pedidos) if lbl in pedidos_sel]
-                df_envio = df_pend.iloc[idx_sel].copy()
-                try:
-                    send_email(email_dest, asunto, df_envio, smtp_cfg)
-                    for i in [pendientes_idx[j] for j in idx_sel]:
-                        st.session_state[sk_sent].add(i)
-                    st.success(f"✅ Enviado a {email_dest} ({len(df_envio)} pedidos)")
-                except Exception as e:
-                    st.error(f"❌ {e}")
+    st.markdown("**📧 Enviar pedidos pendientes:**")
 
-    if st.session_state[sk_sent]:
-        if st.button("↩ Limpiar enviados", key=f"{key_prefix}_clear"):
-            st.session_state[sk_sent] = set()
+    # Destinatario (selectbox — re-renders but stays below table, no jump)
+    rem_idx = st.selectbox(
+        "Destinatario",
+        options=list(range(len(rem_opciones))),
+        format_func=lambda i: rem_opciones[i],
+        index=st.session_state[sk_rem],
+        key=f"{key_prefix}_rem_sel",
+    )
+    st.session_state[sk_rem] = rem_idx
+
+    # Asunto
+    asunto = st.text_input("Asunto", value=st.session_state[sk_sub], key=f"{key_prefix}_asunto")
+    st.session_state[sk_sub] = asunto
+
+    # Pedidos multiselect — all options with estado icon, pre-selected = pending
+    pedidos_sel = st.multiselect(
+        "Pedidos a incluir",
+        options=todas_opciones,
+        default=st.session_state[sk_psel],
+        key=f"{key_prefix}_psel",
+    )
+    st.session_state[sk_psel] = pedidos_sel
+
+    # Enviar button
+    col_btn, col_clr = st.columns([2, 3])
+    with col_btn:
+        if st.button(f"📤 Enviar {len(pedidos_sel)} pedido(s)", type="primary",
+                     key=f"{key_prefix}_enviar",
+                     disabled=len(pedidos_sel) == 0 or rem_idx == 0):
+            rem_lbl = rem_opciones[rem_idx]
+            email_dest, nombre_dest = rem_map.get(rem_lbl, (None, None))
+            idx_sel = [i for i, lbl in enumerate(todas_opciones) if lbl in pedidos_sel]
+            df_envio = df_c.iloc[idx_sel].copy()
+            try:
+                send_email(email_dest, asunto, df_envio, smtp_cfg)
+                for i in idx_sel:
+                    st.session_state[sk_sent].add(i)
+                # Reset selection to remaining pending
+                remaining = [todas_opciones[i] for i in range(len(df_c))
+                             if i not in st.session_state[sk_sent]]
+                st.session_state[sk_psel] = remaining
+                st.success(f"✅ Enviado a {email_dest} ({len(df_envio)} pedidos)")
+            except Exception as e:
+                st.error(f"❌ {e}")
+    with col_clr:
+        if st.session_state[sk_sent]:
+            if st.button("↩ Limpiar enviados", key=f"{key_prefix}_clear"):
+                st.session_state[sk_sent] = set()
+                st.session_state[sk_psel] = todas_opciones
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # SIDEBAR
