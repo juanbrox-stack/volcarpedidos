@@ -372,22 +372,7 @@ def cancelados_widget(df_tarifa, remitentes_df, key_prefix):
     # ── 2. Formulario de envío manual ────────────────────────────────────────
     st.markdown("**📧 Enviar pedidos al canal:**")
 
-    # Selector de pedidos a enviar (multiselect)
-    opciones = [
-        f"#{i} · Pedido {row.get('Pedido','')} · {row.get('Marketplace','')} · "
-        f"SKU {row.get('SKU Original', row.get('SKU',''))} · {row.get('Estado','')}"
-        for i, (_, row) in enumerate(df_c.iterrows())
-    ]
-    seleccion = st.multiselect(
-        "Selecciona los pedidos a enviar",
-        options=opciones,
-        default=[o for i, o in enumerate(opciones) if i not in st.session_state[sk_sent]],
-        key=f"{key_prefix}_sel",
-    )
-    idx_sel = [int(o.split("·")[0].replace("#","").strip()) for o in seleccion]
-    df_sel  = df_c.iloc[idx_sel].copy() if idx_sel else pd.DataFrame()
-
-    # Selector de remitente
+    # Build remitente options
     rem_opciones = ["— elige remitente —"]
     rem_map = {}
     if remitentes_df is not None:
@@ -405,36 +390,38 @@ def cancelados_widget(df_tarifa, remitentes_df, key_prefix):
     with col_rem:
         rem_sel = st.selectbox("Destinatario", rem_opciones, key=f"{key_prefix}_rem")
     with col_asunto:
-        mkts_sel  = ", ".join(df_sel["Marketplace"].unique()) if not df_sel.empty else ""
-        asunto_def = f"Cancelados {mkts_sel}" if mkts_sel else "Cancelados"
-        asunto = st.text_input("Asunto", value=asunto_def, key=f"{key_prefix}_asunto")
+        asunto = st.text_input("Asunto", value="Cancelados", key=f"{key_prefix}_asunto")
 
-    # Botón enviar
     email_dest, nombre_dest = rem_map.get(rem_sel, (None, None))
-    can_send = smtp_cfg and email_dest and not df_sel.empty
+
+    # Botón enviar — envía TODOS los no enviados aún
+    pendientes_idx = [i for i in range(len(df_c)) if i not in st.session_state[sk_sent]]
+    df_pend = df_c.iloc[pendientes_idx].copy() if pendientes_idx else pd.DataFrame()
+    can_send = smtp_cfg and email_dest and not df_pend.empty
 
     hint = ""
-    if not smtp_cfg:      hint = "⚠️ SMTP no configurado en Secrets"
-    elif not email_dest:  hint = "⚠️ Elige un destinatario"
-    elif df_sel.empty:    hint = "⚠️ Selecciona al menos un pedido"
+    if not smtp_cfg:          hint = "⚠️ SMTP no configurado en Secrets"
+    elif not email_dest:      hint = "⚠️ Elige un destinatario"
+    elif df_pend.empty:       hint = "✅ Todos los pedidos ya marcados como enviados"
 
     if hint:
         st.caption(hint)
 
-    if st.button("📤 Enviar email", type="primary", disabled=not can_send,
-                 key=f"{key_prefix}_enviar"):
-        try:
-            send_email(email_dest, asunto, df_sel, smtp_cfg)
-            for i in idx_sel:
-                st.session_state[sk_sent].add(i)
-            st.success(f"✅ Email enviado a {email_dest} ({len(df_sel)} pedidos)")
-        except Exception as e:
-            st.error(f"❌ {e}")
-
-    # Botón limpiar enviados
-    if st.session_state[sk_sent]:
-        if st.button("↩ Limpiar enviados", key=f"{key_prefix}_clear"):
-            st.session_state[sk_sent] = set()
+    col_send, col_clear = st.columns([2, 3])
+    with col_send:
+        if st.button(f"📤 Enviar {len(df_pend)} pedido(s) pendientes", type="primary",
+                     disabled=not can_send, key=f"{key_prefix}_enviar"):
+            try:
+                send_email(email_dest, asunto, df_pend, smtp_cfg)
+                for i in pendientes_idx:
+                    st.session_state[sk_sent].add(i)
+                st.success(f"✅ Enviado a {email_dest} ({len(df_pend)} pedidos)")
+            except Exception as e:
+                st.error(f"❌ {e}")
+    with col_clear:
+        if st.session_state[sk_sent]:
+            if st.button("↩ Limpiar enviados", key=f"{key_prefix}_clear"):
+                st.session_state[sk_sent] = set()
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # SIDEBAR
