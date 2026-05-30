@@ -287,9 +287,18 @@ def send_email(to, asunto, df_lineas, smtp_cfg):
     part.add_header("Content-Disposition", 'attachment; filename="pedidos.xlsx"')
     msg.attach(part)
 
-    with smtplib.SMTP_SSL(server, port) as s:
-        s.login(user, pwd)
-        s.sendmail(user, to, msg.as_string())
+    # Auto-detect SSL vs STARTTLS based on port
+    if int(port) == 465:
+        with smtplib.SMTP_SSL(server, int(port)) as s:
+            s.login(user, pwd)
+            s.sendmail(user, to, msg.as_string())
+    else:
+        with smtplib.SMTP(server, int(port)) as s:
+            s.ehlo()
+            s.starttls()
+            s.ehlo()
+            s.login(user, pwd)
+            s.sendmail(user, to, msg.as_string())
 
 # ── Excel export ──────────────────────────────────────────────────────────────
 def build_excel(sections):
