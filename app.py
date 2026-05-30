@@ -72,6 +72,44 @@ def expand_multi_sku_rows(df):
             rows.append(r)
     return pd.DataFrame(rows)
 
+def hoja1_to_rentabilidad(df):
+    """
+    Convert Hoja1 (orders export) into Rentabilidad format so analyze_row can process it.
+    Hoja1 columns: ID, Cliente, mail, Entrega(País), Telefono, Total(Precio),
+                   Pago(Marketplace), SKU, Cantidad, ..., Combination(Id Marketplace)
+    Hoja2/Rentabilidad columns: Pedido, Fecha, Marketplace, Id Marketplace, País, Sku, Cant, Pedido.1
+    Also handles comma-separated multi-SKU in the SKU column.
+    """
+    rows = []
+    for _, r in df.iterrows():
+        sku_raw = str(r.get("SKU", r.get("Sku", ""))).strip()
+        # Split by comma or space for multi-SKU
+        skus = [s.strip() for s in re.split(r"[, ]+", sku_raw) if s.strip() and s.strip() != "nan"]
+        if not skus:
+            continue
+        pais = str(r.get("Entrega", r.get("País", ""))).strip()
+        mkt  = str(r.get("Pago", r.get("Marketplace", ""))).strip()
+        # Parse price from Total column (format: "17,90 €")
+        precio_raw = r.get("Total", r.get("Pedido.1", ""))
+        precio_str = str(precio_raw).replace("€","").replace(" ","").replace(" ","").replace(",",".").strip()
+        combination = str(r.get("Combination", r.get("Id Marketplace", ""))).strip()
+        n = len(skus)
+        for sku in skus:
+            rows.append({
+                "Pedido":         r.get("ID", r.get("Pedido", "")),
+                "Fecha":          r.get("Fecha", ""),
+                "Marketplace":    mkt,
+                "Id Marketplace": combination,
+                "País":           pais,
+                "Sku":            sku,
+                "Cant":           r.get("Cantidad", r.get("Cant", 1)),
+                "Pedido.1":       precio_str,
+                "_sku_orig":      sku_raw,
+                "_sku_norm":      normalize_sku(sku),
+                "_multi":         n > 1,
+            })
+    return pd.DataFrame(rows)
+
 def build_sheet_lookup(df, sheet_name):
     lookup = {}
     ref_cols = [c for c in df.columns if str(c).strip() == "REFERENCIA"]
@@ -367,8 +405,8 @@ def cancelados_widget(df_tarifa, remitentes_df, key_prefix):
         f'</tr></thead><tbody>{rows_html}</tbody></table>',
         unsafe_allow_html=True)
 
-    # ── 2. Envío con st.form (no dispara re-render hasta Submit) ─────────────
-    # Build remitente options once
+    # ── 2. Envío ──────────────────────────────────────────────────────────────
+    # Build remitente options — sorted alphabetically
     rem_opciones = ["— elige remitente —"]
     rem_map: dict = {}
     if remitentes_df is not None:
@@ -376,70 +414,72 @@ def cancelados_widget(df_tarifa, remitentes_df, key_prefix):
         cc = next((c for c in remitentes_df.columns if "canal" in c.lower()), None)
         nc = next((c for c in remitentes_df.columns if "nombre" in c.lower()), None)
         if ec and cc:
+            entries = []
             for _, r in remitentes_df.iterrows():
                 lbl = f"{r[cc]} — {r[ec]}"
+                entries.append((lbl, (str(r[ec]).strip(), str(r[nc]).strip() if nc else str(r[cc]))))
+            entries.sort(key=lambda x: x[0].lower())
+            for lbl, val in entries:
                 rem_opciones.append(lbl)
-                rem_map[lbl] = (str(r[ec]).strip(), str(r[nc]).strip() if nc else str(r[cc]))
+                rem_map[lbl] = val
 
     pendientes_idx = [i for i in range(len(df_c)) if i not in st.session_state[sk_sent]]
     df_pend = df_c.iloc[pendientes_idx].copy() if pendientes_idx else pd.DataFrame()
+    mkts_disponibles = sorted(df_pend["Marketplace"].unique().tolist()) if not df_pend.empty else []
 
     if not smtp_cfg:
         st.caption("⚠️ SMTP no configurado en Secrets — no se pueden enviar emails")
+    elif df_pend.empty:
+        st.success("✅ Todos los pedidos ya enviados")
     else:
         st.markdown("**📧 Enviar pedidos pendientes:**")
-        # All unique marketplaces among pending rows
-        mkts_disponibles = sorted(df_pend["Marketplace"].unique().tolist()) if not df_pend.empty else []
 
+        # ── Canal filter OUTSIDE form (avoids re-render jump) ─────────────────
+        sk_mkts = f"{key_prefix}_mkts"
+        if sk_mkts not in st.session_state:
+            st.session_state[sk_mkts] = mkts_disponibles
+        # Keep only valid options (in case df_pend changed)
+        st.session_state[sk_mkts] = [m for m in st.session_state[sk_mkts] if m in mkts_disponibles]
+        if not st.session_state[sk_mkts]:
+            st.session_state[sk_mkts] = mkts_disponibles
+
+        mkts_sel = st.multiselect(
+            "Canales a incluir en este email",
+            options=mkts_disponibles,
+            default=st.session_state[sk_mkts],
+            key=f"{key_prefix}_mkts_widget",
+        )
+        # Sync back to session_state without rerun
+        st.session_state[sk_mkts] = mkts_sel
+
+        df_envio = df_pend[df_pend["Marketplace"].isin(mkts_sel)] if mkts_sel else pd.DataFrame()
+
+        # ── Destinatario + Asunto + Enviar inside form ────────────────────────
         with st.form(key=f"{key_prefix}_form"):
             col_rem, col_asunto = st.columns([2, 3])
             with col_rem:
                 rem_sel = st.selectbox("Destinatario", rem_opciones)
             with col_asunto:
                 asunto = st.text_input("Asunto", value="Cancelados")
-
-            # Canal filter — inside form so no intermediate re-renders
-            if mkts_disponibles:
-                mkts_sel = st.multiselect(
-                    "Canales a incluir en este email",
-                    options=mkts_disponibles,
-                    default=mkts_disponibles,
-                    help="Selecciona uno o varios canales. Útil cuando un remitente gestiona varios marketplaces.",
-                )
-            else:
-                mkts_sel = []
-
-            # Compute how many rows will be sent
-            if mkts_sel:
-                df_envio = df_pend[df_pend["Marketplace"].isin(mkts_sel)]
-            else:
-                df_envio = df_pend
-
             submitted = st.form_submit_button(
                 f"📤 Enviar {len(df_envio)} pedido(s)",
                 type="primary",
-                disabled=df_pend.empty,
+                disabled=df_envio.empty,
             )
 
         if submitted:
             email_dest, nombre_dest = rem_map.get(rem_sel, (None, None))
             if not email_dest:
                 st.warning("⚠️ Elige un destinatario válido")
-            elif not mkts_sel:
-                st.warning("⚠️ Selecciona al menos un canal")
             elif df_envio.empty:
-                st.warning("⚠️ No hay pedidos pendientes para los canales seleccionados")
+                st.warning("⚠️ Selecciona al menos un canal con pedidos pendientes")
             else:
                 try:
                     send_email(email_dest, asunto, df_envio, smtp_cfg)
-                    # Mark as sent the rows that were actually sent
-                    sent_positions = [
-                        i for i in pendientes_idx
-                        if df_c.iloc[i]["Marketplace"] in mkts_sel
-                    ]
-                    for i in sent_positions:
+                    sent_pos = [i for i in pendientes_idx if df_c.iloc[i]["Marketplace"] in mkts_sel]
+                    for i in sent_pos:
                         st.session_state[sk_sent].add(i)
-                    st.success(f"✅ Enviado a {email_dest} ({len(df_envio)} pedidos de: {', '.join(mkts_sel)})")
+                    st.success(f"✅ Enviado a {email_dest} ({len(df_envio)} pedidos — {', '.join(mkts_sel)})")
                 except Exception as e:
                     st.error(f"❌ {e}")
 
@@ -538,11 +578,21 @@ if not es_miravia:
         h1_clean  = clean_hoja1(h1_raw) if not h1_raw.empty else pd.DataFrame()
         dupes_h1  = check_dupes_hoja1(h1_clean) if not h1_clean.empty else pd.DataFrame()
 
+        # If no Hoja2, derive rentabilidad data from Hoja1 directly
+        fuente_tarifa = "Hoja2"
+        if h2_raw.empty and not h1_clean.empty:
+            h2_raw = hoja1_to_rentabilidad(h1_clean)
+            fuente_tarifa = "Hoja1"
+
         df_tarifa   = pd.DataFrame()
         multi_count = 0
         if not h2_raw.empty:
-            df_exp = expand_multi_sku_rows(h2_raw)
-            multi_count = int(df_exp["_multi"].sum())
+            # If already expanded by hoja1_to_rentabilidad, skip expand; else expand
+            if fuente_tarifa == "Hoja1":
+                df_exp = h2_raw  # already expanded and normalized
+            else:
+                df_exp = expand_multi_sku_rows(h2_raw)
+            multi_count = int(df_exp["_multi"].sum()) if "_multi" in df_exp.columns else 0
             results = []
             for _, row in df_exp.iterrows():
                 status, pvp_min, pvp_pub, d_min, d_pub, sh = analyze_row(row, nac_lkp, inter_lkp)
@@ -584,12 +634,14 @@ if not es_miravia:
     tab1, tab2, tab3 = st.tabs(["💰 Análisis Tarifa", "🔍 Duplicados Hoja1", "📄 Hoja1 limpia"])
     with tab1:
         if not df_tarifa.empty:
+            if fuente_tarifa == "Hoja1":
+                st.info("ℹ️ Análisis realizado sobre Hoja1 (no existe Hoja2 en el fichero)")
             if multi_count > 0:
                 st.info(f"🔀 {multi_count} líneas generadas por expansión de pedidos multi-SKU")
             st.dataframe(df_tarifa.style.map(color_status, subset=["Estado"]),
                          use_container_width=True, hide_index=True)
         else:
-            st.info("No hay datos en Hoja2.")
+            st.info("No hay datos para análisis de tarifa.")
     with tab2:
         if len(dupes_h1) > 0:
             st.warning(f"⚠️ {len(dupes_h1)} filas duplicadas (col C mail + col O Marketplace Order ID)")
